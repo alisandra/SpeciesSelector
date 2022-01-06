@@ -25,10 +25,9 @@ def setup():
 
 @cli.command()
 @click.option('--working-dir')
-def next(database):
-    click.echo(f'Dropped the database {database}')
+def next(working_dir):
+    click.echo(f'will setup and run next step for {working_dir}')
     # if latest round status is 2, start training seeds
-    # if 3, check output of 2
-
-if __name__ == "__main__":
-    cli()
+    # if 3, check and record output/nni IDs of 2, start fine tuning adjustments
+    # if 4, check and record output/nni IDs of 3, start evaluation
+    # if 5, check output of 4, record evaluation results, init and prep next round
