@@ -3,7 +3,7 @@ from setuptools import setup
 setup(
     name='speciesselector',
     version='0.1.0',
-    py_modules=['speciesselector'],
+    py_modules=['speciesselector', 'speciesselector.database'],
     install_requires=[
         'Click',
     ],

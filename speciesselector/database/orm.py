@@ -7,7 +7,9 @@ import enum
 Base = declarative_base()
 
 
-class Paths(Base):
+class Path(Base):
+    """stores paths (from user) on where to find data and more"""
+    __tablename__ = 'path'
     id = Column(Integer, primary_key=True)
     name = Column(String, nullable=False)
     value = Column(String)

@@ -1,2 +1,7 @@
 sqlalchemy
 click
+numpy
+lxml
+PyQt5
+ete3==3.1.2  # acquired from github, this probably won't work as is
+six
