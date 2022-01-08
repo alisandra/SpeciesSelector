@@ -43,15 +43,17 @@ class Round(Base):
     nni_seeds_id = Column(String)
     nni_adjustment_id = Column(String)
     nni_eval_id = Column(String)
+    seed_models = relationship('SeedModel', back_populates='round')
 
 
 class SeedTrainingSpecies(Base):
     """stores which species were in the seed training set in each round"""
     __tablename__ = 'seed_training_species'
     id = Column(Integer, primary_key=True)
-    seed_id = Column(Integer, ForeignKey('seed_model.id'), nullable=False)
-    model = relationship('SeedModel', back_populates='seed_training_species')
+    seed_model_id = Column(Integer, ForeignKey('seed_model.id'), nullable=False)
+    seed_model = relationship('SeedModel', back_populates='seed_training_species')
     species_id = Column(Integer, ForeignKey('species.id'), nullable=False)
+    species = relationship('Species')
 
 
 class SeedModel(Base):
@@ -59,8 +61,9 @@ class SeedModel(Base):
     __tablename__ = 'seed_model'
     id = Column(Integer, primary_key=True)
     round_id = Column(Integer, ForeignKey('round.id'), nullable=False)
+    round = relationship('Round', back_populates='seed_models')
     split = Column(Integer)  # could also be derived from species below
-    seed_training_species = relationship('SeedTrainingSpecies', back_populates='model')
+    seed_training_species = relationship('SeedTrainingSpecies', back_populates='seed_model')
 
     @property
     def seed_validation_species(self):

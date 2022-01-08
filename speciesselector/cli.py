@@ -16,7 +16,8 @@ def cli():
 @click.option('--working-dir', required=True)
 @click.option('--tree', required=True)
 @click.option('--nni-config', required=True)
-def setup(working_dir, species_full, species_subset, tree, nni_config):
+@click.option('--exact-match', is_flag=True)
+def setup(working_dir, species_full, species_subset, tree, nni_config, exact_match):
     """prepares sqlitedb, species weighting and splitting, etc for later use"""
     # check naming in species full/subset that everything matches
     list_full = os.listdir(species_full)
@@ -42,8 +43,10 @@ def setup(working_dir, species_full, species_subset, tree, nni_config):
     # assign weight to species according to depth in tree (deeper, where more species are, is lower)
     # this is so that the trained models are selected for lower phylogenetic bias than the input data
     # this also splits species into sets (2)
-    dbmanagement.add_species_from_tree(tree, list_full, session, engine)
+    dbmanagement.add_species_from_tree(tree, list_full, session, exact_match)
     # randomly select training seed species for each set
+    r = dbmanagement.RoundHandler(session, 0, 0)
+    r.set_first_seeds()
     # initialize and prep first round (seed training, adjustment training, model renaming (more symlinks), eval
 
 
