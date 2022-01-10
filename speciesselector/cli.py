@@ -47,6 +47,7 @@ def setup(working_dir, species_full, species_subset, tree, nni_config, exact_mat
     # randomly select training seed species for each set
     r = dbmanagement.RoundHandler(session, 0, 0)
     r.set_first_seeds()
+    r.setup_data()
     # initialize and prep first round (seed training, adjustment training, model renaming (more symlinks), eval
 
 

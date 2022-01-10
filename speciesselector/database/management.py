@@ -67,10 +67,14 @@ class RoundHandler:
             if not os.path.exists(path):
                 os.makedirs(path)
 
+    @staticmethod
+    def adj_str(adj_sp):
+        return f'adjustment_{adj_sp}'
+
     @property
     def dir(self):
         rtemp, stemp = 'round_{:03}', 'split_{:02}'
-        working_dir = self.session.query(orm.Path).filter(orm.Path.name == "working_dir").all()[0]
+        working_dir = self.session.query(orm.Path).filter(orm.Path.name == "working_dir").all()[0].value
         return os.path.join(working_dir, rtemp.format(self.id), stemp.format(self.split))
 
     def set_first_seeds(self, n_seeds=8):
@@ -88,11 +92,11 @@ class RoundHandler:
 
     @property
     def full_dir(self):
-        return self.session.query(orm.Path).filter(orm.Path.name == 'species_full').first()
+        return self.session.query(orm.Path).filter(orm.Path.name == 'species_full').first().value
 
     @property
     def subset_dir(self):
-        return self.session.query(orm.Path).filter(orm.Path.name == 'species_subset').first()
+        return self.session.query(orm.Path).filter(orm.Path.name == 'species_subset').first().value
 
     @property
     def seed_model(self):
@@ -109,29 +113,41 @@ class RoundHandler:
         split_sp = self.session.query(orm.Species).filter(orm.Species.split == self.split).all()
         return [sp for sp in split_sp if sp not in self.seed_training_species]
 
-    @property
-    def adj_training_dirs(self):
-        return ['adjustment_{}'.format(sp.name) for sp in self.seed_training_species]
-
     def setup_data(self):
-        # setup training dir of seeds with 'full' h5 files
-        for dpath in [self.seed_str] + self.adj_training_dirs:
-            os.makedirs(dpath)
+        # seed trainers
+        seed_sp_t = self.seed_training_species
+        # seed validation AND adjustment species that will be added 1 by 1 to trainers
+        seed_sp_v = self.seed_validation_species
 
         # setup seed data
-        seed_sp_t = self.seed_training_species
-        seed_sp_v = self.seed_validation_species
+        # seed training prep with 'full' h5 files
         full_dir = self.full_dir
         subset_dir = self.subset_dir
+        seed_dir = os.path.join(self.dir, 'data', self.seed_str)
+        os.makedirs(seed_dir)
         for sp in seed_sp_t:
             os.symlink(
-                os.path.join(full_dir, sp.name, 'testing_data.h5'),
-                os.path.join(self.dir, 'data', self.seed_str, 'training_data.{}.h5'.format(sp.name)))
+                os.path.join(full_dir, sp.name, 'test_data.h5'),
+                os.path.join(seed_dir, f'training_data.{sp.name}.h5'))
         for sp in seed_sp_v:
             os.symlink(
-                os.path.join(subset_dir, sp.name, 'testing_data.h5'),
-                os.path.join(self.dir, 'data', self.seed_str, 'validation_data.{}.h5'.format(sp.name))
+                os.path.join(subset_dir, sp.name, 'test_data.h5'),
+                os.path.join(seed_dir, f'validation_data.{sp.name}.h5')
             )
         # setup adjusted data
+        for adj_sp in seed_sp_v:
+            adj_dir = os.path.join(self.dir, 'data', self.adj_str(adj_sp.name))
+            os.makedirs(adj_dir)
+            for sp in seed_sp_t + [adj_sp]:  # same trainers as seed + adjustment species
+                os.symlink(
+                    os.path.join(subset_dir, sp.name, 'test_data.h5'),
+                    os.path.join(adj_dir, f'training_data.{sp.name}.h5')
+                )
+            for sp in seed_sp_v:
+                if not sp == adj_sp:  # same validators as seed - adjustment species
+                    os.symlink(
+                        os.path.join(subset_dir, sp.name, 'test_data.h5'),
+                        os.path.join(adj_dir, f'validation_data.{sp.name}.h5')
+                    )
 
 
