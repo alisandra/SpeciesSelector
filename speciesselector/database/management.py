@@ -1,4 +1,6 @@
 import os
+import shutil
+
 from . import orm
 from sqlalchemy import create_engine
 from sqlalchemy.orm import sessionmaker
@@ -6,6 +8,10 @@ from ete3 import Tree
 from speciesselector.helpers import match_tree_names_plants, match_tree_names_exact
 import math
 import random
+import json
+import re
+
+ospj = os.path.join
 
 
 def mk_session(database_path, new_db=True):
@@ -64,6 +70,8 @@ class PathMaker:
     eval_str = 'evaluation'
     nni_str = 'nni'
     models_str = 'models'
+    config_yml = 'config.yml'
+    search_space_json = 'search_space.json'
 
     def __init__(self, session):
         self.session = session
@@ -98,10 +106,10 @@ class PathMaker:
         return self.path_by_name('phylo_tree')
 
     def full_h5(self, species_name):
-        return os.path.join(self.species_full, species_name, self.test_data)
+        return ospj(self.species_full, species_name, self.test_data)
 
     def subset_h5(self, species_name):
-        return os.path.join(self.species_subset, species_name, self.test_data)
+        return ospj(self.species_subset, species_name, self.test_data)
 
     # round related dynamic
     @staticmethod
@@ -112,52 +120,52 @@ class PathMaker:
     @mkdir_neg_p
     def round(self, rnd):
         rtemp, stemp = 'round_{:03}', 'split_{:02}'
-        return os.path.join(self.working_dir, rtemp.format(rnd.id), stemp.format(rnd.split))
+        return ospj(self.working_dir, rtemp.format(rnd.id), stemp.format(rnd.split))
 
     @mkdir_neg_p
     def round_data(self, rnd):
-        return os.path.join(self.round(rnd), self.data_str)
+        return ospj(self.round(rnd), self.data_str)
 
     @mkdir_neg_p
     def round_data_seed(self, rnd):
-        return os.path.join(self.round_data(rnd), self.seed_str)
+        return ospj(self.round_data(rnd), self.seed_str)
 
     @mkdir_neg_p
     def round_data_adj(self, rnd):
-        return os.path.join(self.round_data(rnd), self.adj_str)
+        return ospj(self.round_data(rnd), self.adj_str)
 
     @mkdir_neg_p
     def round_data_adj_sp(self, rnd, species_name):
-        return os.path.join(self.round_data(rnd), self.adj_str_sp(species_name))
+        return ospj(self.round_data(rnd), self.adj_str_sp(species_name))
 
     # round/training related
     @mkdir_neg_p
     def round_training(self, rnd):
-        return os.path.join(self.round(rnd), self.training_str)
+        return ospj(self.round(rnd), self.training_str)
 
     @mkdir_neg_p
     def round_training_seed(self, rnd):
-        return os.path.join(self.round_training(rnd), self.seed_str)
+        return ospj(self.round_training(rnd), self.seed_str)
 
     @mkdir_neg_p
     def round_training_adj(self, rnd):
-        return os.path.join(self.round_training(rnd), self.adj_str)
+        return ospj(self.round_training(rnd), self.adj_str)
 
     @mkdir_neg_p
     def round_training_seed_nni(self, rnd):
-        return os.path.join(self.round_training_seed(rnd), self.nni_str)
+        return ospj(self.round_training_seed(rnd), self.nni_str)
 
     @mkdir_neg_p
     def round_training_seed_models(self, rnd):
-        return os.path.join(self.round_training_seed(rnd), self.models_str)
+        return ospj(self.round_training_seed(rnd), self.models_str)
 
     @mkdir_neg_p
     def round_training_adj_nni(self, rnd):
-        return os.path.join(self.round_training_adj(rnd), self.nni_str)
+        return ospj(self.round_training_adj(rnd), self.nni_str)
 
     @mkdir_neg_p
     def round_training_adj_models(self, rnd):
-        return os.path.join(self.round_training_adj(rnd), self.models_str)
+        return ospj(self.round_training_adj(rnd), self.models_str)
 
 
 class RoundHandler:
@@ -224,7 +232,7 @@ class RoundHandler:
                 h5 = f'training_data.{species_name}.h5'
             else:
                 h5 = f'validation_data.{species_name}.h5'
-            return os.path.join(dest_dir, h5)
+            return ospj(dest_dir, h5)
 
         for sp in seed_sp_t:
             # for seed train
@@ -242,11 +250,54 @@ class RoundHandler:
             for sp in seed_sp_v:
                 if not sp == adj_sp:  # same validators as seed - adjustment species
                     os.symlink(self.pm.subset_h5(sp.name), dest(adj_sp_dir, sp.name, is_train=False))
+        # todo one by one drop of training species as well
 
     def setup_control_files(self):
         # train seed
-        with open(self.pm.config_template) as f:
-            config_template_text = f.readlines()
+        configgy = Configgy(self.pm.config_template, self)
+        cfg_ssj = configgy.fmt_train_seed()
+        configgy.write_to(cfg_ssj, self.pm.round_training_seed_nni(self))
+        # train adjustments
+        cfg_ssj = configgy.fmt_train_adjust()
+        configgy.write_to(cfg_ssj, self.pm.round_training_adj_nni(self))
+        # todo! evaluation adjustments
+
+
+class Configgy:
+    def __init__(self, template_path: str, round_handler: RoundHandler):
+        with open(template_path) as f:
+            self.config_template = f.readlines()
+        self.config_template = [x.rstrip() for x in self.config_template]
+        for i, line in enumerate(self.config_template):
+            self.config_template[i] = line.rstrip()
+            if re.match('^ +command:', line):
+                self.config_template[i] = line + ' {}'
+        self.rh = round_handler
+
+    def config(self, additions=''):
+        return '\n'.join(self.config_template).format(additions)
+
+    def fmt_train_seed(self):
+        search_space = {'data_dir': {'_type': "choice", "_value": [self.rh.pm.round_data_seed(self.rh)]}}
+        config_str = self.config()
+        return config_str, search_space
+
+    def fmt_train_adjust(self):
+        config_str = self.config('--resume-training --load-model-path {}/seed/best_model.h5'.format(
+            self.rh.pm.round_training_seed_models(self.rh)))
+        data_dirs = [self.rh.pm.round_data_adj(self.rh)] + [self.rh.pm.round_data_adj_sp(self.rh, sp.name)
+                                                            for sp in self.rh.seed_validation_species]
+        search_space = {'data_dir': {'_type': "choice", "_value": data_dirs}}
+        return config_str, search_space
+
+    def write_to(self, config_search_space, outdir):
+        cfg, search_space = config_search_space
+        with open(ospj(outdir, self.rh.pm.config_yml), 'w') as f:
+            f.write(cfg)
+        with open(ospj(outdir, self.rh.pm.search_space_json), 'w') as f:
+            json.dump(search_space, f, indent=4)
+
+
 
 
 
