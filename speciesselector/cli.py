@@ -33,10 +33,12 @@ def setup(working_dir, species_full, species_subset, tree, nni_config, exact_mat
     shutil.copy(tree, os.path.join(working_dir, 'phylo.tre'))
     shutil.copy(nni_config, os.path.join(working_dir, 'config_template.yml'))  # todo, train and eval versions?
 
-    # what we don't copy, we keep the path to
+    # record paths for later convenience
     new_paths = [orm.Path(name='working_dir', value=working_dir),
                  orm.Path(name='species_full', value=species_full),
-                 orm.Path(name='species_subset', value=species_subset)]
+                 orm.Path(name='species_subset', value=species_subset),
+                 orm.Path(name='config_template', value=os.path.join(working_dir, 'config_template.yml')),
+                 orm.Path(name='phylo_tree', value=os.path.join(working_dir, 'phylo.tre'))]
     session.add_all(new_paths)
     session.commit()
 
