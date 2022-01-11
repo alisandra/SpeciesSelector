@@ -222,9 +222,8 @@ class PathMaker:
     def h5_round_adj_sp(self, rnd, species_name, model='best_model.h5'):
         return ospj(self.models_round_adj_sp(rnd, species_name), model)
 
-    #@mkdir_neg_p
-    #{}/seed/best_model.h5'.format(
-    #        self.rh.pm.round_training_seed_models(self.rh))
+    def h5_round_custom(self, rnd, custom, model='best_model.h5'):
+        return ospj(self.models_round(rnd), custom, model)
 
 
 class RoundHandler:
@@ -359,11 +358,45 @@ class RoundHandler:
     def check_and_link_seed_results(self):
         assert self.round.status.name == "seeds_training"
         # get trial dir
-        trials = os.listdir(ospj(self.pm.nni_home, self.round.nni_seeds_id, 'trials'))
+        trial_base = ospj(self.pm.nni_home, self.round.nni_seeds_id, 'trials')
+        trials = os.listdir(trial_base)
         assert len(trials) == 1, "expected exactly 1 trial for seed training of round {}/split{}".format(
             self.id, self.split)
         trial = trials[0]
         # link best model
+        os.symlink(ospj(trial_base, trial, 'best_model.h5'), self.pm.h5_round_seed(self))
+        # stop nni, so that next step can be started UPDATE4SPLIT
+        subprocess.run(['nnictl', 'stop'])
+
+    def start_adj_training(self):
+        assert self.round.status == "seed_training"
+        nni_dir = self.pm.nni_training_adj_round(self)
+        subprocess.run(['nnictl', 'create', '-c', self.pm.config_yml], cwd=nni_dir)
+        # copy control files to nni directory (as usual/for convenience)
+        nni_exp_id = self.cp_control_files(_from=nni_dir)
+        self.round.nni_adjustment_id = nni_exp_id
+        # record nni_id in db
+        self.round.status = "adjustments_training"
+        self.session.add(self.round)
+        self.session.commit()
+
+    def check_and_link_adj_results(self):
+        assert self.round.status.name == "adjustments_training"
+        # get trial dir
+        trial_base = ospj(self.pm.nni_home, self.round.nni_seeds_id, 'trials')
+        trials = os.listdir(trial_base)
+        assert len(trials) > 1, "expected multiple adjustment trials but found only {} for round{}/split{}".format(
+            len(trials), self.id, self.split)
+        # link best model
+        for trial in trials:
+            # todo mv path to pm, maybe most of this loop actually
+            with open(ospj(trial_base, trial, 'parameter.cfg')) as f:
+                pars = json.load(f)
+            data_dir = pars['parameters']['data_dir']
+            full_adj_str = data_dir.split('/')[-1]
+            os.symlink(ospj(trial_base, trial, 'best_model.h5'), self.pm.h5_round_custom(self, full_adj_str))
+        # stop nni, so that next step can be started UPDATE4SPLIT
+        subprocess.run(['nnictl', 'stop'])
 
 
 class Configgy:
@@ -386,8 +419,8 @@ class Configgy:
         return config_str, search_space
 
     def fmt_train_adjust(self):
-        config_str = self.config('--resume-training --load-model-path {}/seed/best_model.h5'.format(
-            self.rh.pm.models_round_seed(self.rh)))
+        config_str = self.config('--resume-training --load-model-path {}'.format(
+            self.rh.pm.h5_round_seed(self.rh)))
         data_dirs = [self.rh.pm.data_round_adj(self.rh)] + [self.rh.pm.data_round_adj_sp(self.rh, sp.name)
                                                             for sp in self.rh.seed_validation_species]
         search_space = {'data_dir': {'_type': "choice", "_value": data_dirs}}
@@ -398,9 +431,8 @@ class Configgy:
         xfold_species = self.rh.session.query(orm.Species).filter(orm.Species.split != self.rh.split).all()
         infold_species = self.rh.session.query(orm.Species).filter(orm.Species.split == self.rh.split).all()
         test_datas = [self.rh.pm.subset_h5(sp.name) for sp in xfold_species]
-        load_model_paths = [self.rh.pm.adj_str] + [self.rh.pm.adj_str_sp(sp.name) for sp in infold_species]
-        adj_model_path = self.rh.pm.models_round_adj(self.rh)
-        load_model_paths = [ospj(adj_model_path, adir, 'best_model.h5') for adir in load_model_paths]
+        load_model_paths = [self.rh.pm.h5_round_adj(self.rh)] + [self.rh.pm.h5_round_adj_sp(self.rh, sp.name)
+                                                                 for sp in infold_species]
         search_space = {'test_data': {'_type': "choice", "_value": test_datas},
                         'load_model_path': {'_type': 'choice', '_value': load_model_paths}}
         return config_str, search_space
