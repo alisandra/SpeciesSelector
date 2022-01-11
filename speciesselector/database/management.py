@@ -1,5 +1,6 @@
 import os
 import shutil
+import subprocess
 
 from . import orm
 from sqlalchemy import create_engine
@@ -51,8 +52,8 @@ def add_species_from_tree(tree_path, sp_names, session, exact_match):
 
 
 def mkdir_neg_p(path_fn):
-    def inner(*arg):
-        path = path_fn(*arg)
+    def inner(*args, **kwargs):
+        path = path_fn(*args, **kwargs)
         if not os.path.exists(path):
             os.makedirs(path)
         return path
@@ -76,6 +77,9 @@ class PathMaker:
     def __init__(self, session):
         self.session = session
         self.cache = {}
+
+        home = os.environ['HOME']
+        self.nni_home = ospj(home, 'nni-experiments')
 
     def path_by_name(self, name):
         # pull from db only once per PathMaker instance
@@ -120,52 +124,107 @@ class PathMaker:
     @mkdir_neg_p
     def round(self, rnd):
         rtemp, stemp = 'round_{:03}', 'split_{:02}'
-        return ospj(self.working_dir, rtemp.format(rnd.id), stemp.format(rnd.split))
+        return ospj(rtemp.format(rnd.id), stemp.format(rnd.split))
+
+    @property
+    @mkdir_neg_p
+    def data(self):
+        return ospj(self.working_dir, self.data_str)
 
     @mkdir_neg_p
-    def round_data(self, rnd):
-        return ospj(self.round(rnd), self.data_str)
+    def data_round(self, rnd):
+        return ospj(self.data, self.round(rnd))
 
     @mkdir_neg_p
-    def round_data_seed(self, rnd):
-        return ospj(self.round_data(rnd), self.seed_str)
+    def data_round_seed(self, rnd):
+        return ospj(self.data_round(rnd), self.seed_str)
 
     @mkdir_neg_p
-    def round_data_adj(self, rnd):
-        return ospj(self.round_data(rnd), self.adj_str)
+    def data_round_adj(self, rnd):
+        return ospj(self.data_round(rnd), self.adj_str)
 
     @mkdir_neg_p
-    def round_data_adj_sp(self, rnd, species_name):
-        return ospj(self.round_data(rnd), self.adj_str_sp(species_name))
+    def data_round_adj_sp(self, rnd, species_name):
+        return ospj(self.data_round(rnd), self.adj_str_sp(species_name))
 
-    # round/training related
+    # nni paths
+    @property
     @mkdir_neg_p
-    def round_training(self, rnd):
-        return ospj(self.round(rnd), self.training_str)
+    def nni(self):
+        return ospj(self.working_dir, self.nni_str)
+
+    @property
+    @mkdir_neg_p
+    def nni_training_seed(self):
+        return ospj(self.nni, self.training_str, self.seed_str)
+
+    @property
+    @mkdir_neg_p
+    def nni_training_adj(self):
+        return ospj(self.nni, self.training_str, self.adj_str)
+
+    @property
+    @mkdir_neg_p
+    def nni_evaluation_adj(self):
+        return ospj(self.nni, self.eval_str, self.adj_str)
+    #@mkdir_neg_p
+    #def round_training(self, rnd):
+    #    return ospj(self.round(rnd), self.training_str)
+
+    #@mkdir_neg_p
+    #def round_training_seed(self, rnd):
+    #    return ospj(self.round_training(rnd), self.seed_str)
+
+    #@mkdir_neg_p
+    #def round_training_adj(self, rnd):
+    #    return ospj(self.round_training(rnd), self.adj_str)
 
     @mkdir_neg_p
-    def round_training_seed(self, rnd):
-        return ospj(self.round_training(rnd), self.seed_str)
+    def nni_training_seed_round(self, rnd):
+        return ospj(self.nni_training_seed, self.round(rnd))
 
     @mkdir_neg_p
-    def round_training_adj(self, rnd):
-        return ospj(self.round_training(rnd), self.adj_str)
+    def nni_training_adj_round(self, rnd):
+        return ospj(self.nni_training_adj, self.round(rnd))
 
     @mkdir_neg_p
-    def round_training_seed_nni(self, rnd):
-        return ospj(self.round_training_seed(rnd), self.nni_str)
+    def nni_evaluation_adj_round(self, rnd):
+        return ospj(self.nni_evaluation_adj, self.round(rnd))
+
+    # model organization
+    @property
+    @mkdir_neg_p
+    def models(self):
+        return ospj(self.working_dir, self.models_str)
 
     @mkdir_neg_p
-    def round_training_seed_models(self, rnd):
-        return ospj(self.round_training_seed(rnd), self.models_str)
+    def models_round(self, rnd):
+        return ospj(self.models, self.round(rnd))
 
     @mkdir_neg_p
-    def round_training_adj_nni(self, rnd):
-        return ospj(self.round_training_adj(rnd), self.nni_str)
+    def models_round_seed(self, rnd):
+        return ospj(self.models_round(rnd), self.seed_str)
+
+    def h5_round_seed(self, rnd, model='best_model.h5'):
+        return ospj(self.models_round_seed(rnd), model)
 
     @mkdir_neg_p
-    def round_training_adj_models(self, rnd):
-        return ospj(self.round_training_adj(rnd), self.models_str)
+    def models_round_adj(self, rnd):
+        return ospj(self.models_round(rnd), self.adj_str)
+
+    def h5_round_adj(self, rnd, model='best_model.h5'):
+        return ospj(self.models_round_adj(rnd), model)
+
+    @mkdir_neg_p
+    def models_round_adj_sp(self, rnd, species_name):
+        return ospj(self.models_round(rnd), self.adj_str_sp(species_name))
+
+    def h5_round_adj_sp(self, rnd, species_name, model='best_model.h5'):
+        return ospj(self.models_round_adj_sp(rnd, species_name), model)
+
+    #@mkdir_neg_p
+    #{}/seed/best_model.h5'.format(
+    #        self.rh.pm.round_training_seed_models(self.rh))
 
 
 class RoundHandler:
@@ -223,8 +282,8 @@ class RoundHandler:
 
         # setup seed data
         # seed training prep with 'full' h5 files
-        seed_dir = self.pm.round_data_seed(self)
-        adj_dir = self.pm.round_data_adj(self)
+        seed_dir = self.pm.data_round_seed(self)
+        adj_dir = self.pm.data_round_adj(self)
 
         def dest(dest_dir, species_name, is_train=True):
             """final path to symlink train/val h5 files to"""
@@ -243,24 +302,68 @@ class RoundHandler:
             os.symlink(self.pm.subset_h5(sp.name), dest(seed_dir, sp.name, is_train=False))
             os.symlink(self.pm.subset_h5(sp.name), dest(adj_dir, sp.name, is_train=False))
         # setup adjusted data
+        # one by one addition of validation species to train
         for adj_sp in seed_sp_v:
-            adj_sp_dir = self.pm.round_data_adj_sp(self, adj_sp.name)
+            adj_sp_dir = self.pm.data_round_adj_sp(self, adj_sp.name)
             for sp in seed_sp_t + [adj_sp]:  # same trainers as seed + adjustment species
                 os.symlink(self.pm.subset_h5(sp.name), dest(adj_sp_dir, sp.name))
             for sp in seed_sp_v:
                 if not sp == adj_sp:  # same validators as seed - adjustment species
                     os.symlink(self.pm.subset_h5(sp.name), dest(adj_sp_dir, sp.name, is_train=False))
-        # todo one by one drop of training species as well
+        # one by one drop of training species from train
+        for adj_sp in seed_sp_t:
+            adj_sp_dir = self.pm.data_round_adj_sp(self, adj_sp.name)
+            for sp in seed_sp_t:
+                if not sp == adj_sp:  # - adjustment species from train
+                    os.symlink(self.pm.subset_h5(sp.name), dest(adj_sp_dir, sp.name))
+            for sp in seed_sp_v + [adj_sp]:  # + adjustment species to val
+                os.symlink(self.pm.subset_h5(sp.name), dest(adj_sp_dir, sp.name, is_train=False))
 
     def setup_control_files(self):
         # train seed
         configgy = Configgy(self.pm.config_template, self)
         cfg_ssj = configgy.fmt_train_seed()
-        configgy.write_to(cfg_ssj, self.pm.round_training_seed_nni(self))
+        configgy.write_to(cfg_ssj, self.pm.nni_training_seed_round(self))
         # train adjustments
         cfg_ssj = configgy.fmt_train_adjust()
-        configgy.write_to(cfg_ssj, self.pm.round_training_adj_nni(self))
-        # todo! evaluation adjustments
+        configgy.write_to(cfg_ssj, self.pm.nni_training_adj_round(self))
+        # evaluation adjustments
+        cfg_ssj = configgy.fmt_evaluations()
+        configgy.write_to(cfg_ssj, self.pm.nni_evaluation_adj_round(self))
+        self.round.status = "prepped"
+        self.session.add(self.round)
+        self.session.commit()
+
+    def cp_control_files(self, _from):
+        experiment_json = subprocess.check_output(['nnictl', 'experiment', 'show'])
+        exp_id = json.loads(experiment_json)['id']
+        start_dir = ospj(self.pm.nni_home, exp_id, 'start')
+        os.mkdir(start_dir)
+        shutil.copy(ospj(_from, 'search_space.json'), start_dir)
+        shutil.copy(ospj(_from, 'config.yml'), start_dir)
+        return exp_id
+
+    def start_seed_training(self):
+        assert self.round.status.name == "prepped"
+        # start
+        nni_dir = self.pm.nni_training_seed_round(self)
+        subprocess.run(['nnictl', 'create', '-c', self.pm.config_yml], cwd=nni_dir)
+        # copy control files to nni directory (as usual/for convenience)
+        nni_exp_id = self.cp_control_files(_from=nni_dir)
+        # record nni_id in db
+        self.round.nni_seeds_id = nni_exp_id
+        self.round.status = "seeds_training"
+        self.session.add(self.round)
+        self.session.commit()
+
+    def check_and_link_seed_results(self):
+        assert self.round.status.name == "seeds_training"
+        # get trial dir
+        trials = os.listdir(ospj(self.pm.nni_home, self.round.nni_seeds_id, 'trials'))
+        assert len(trials) == 1, "expected exactly 1 trial for seed training of round {}/split{}".format(
+            self.id, self.split)
+        trial = trials[0]
+        # link best model
 
 
 class Configgy:
@@ -278,16 +381,28 @@ class Configgy:
         return '\n'.join(self.config_template).format(additions)
 
     def fmt_train_seed(self):
-        search_space = {'data_dir': {'_type': "choice", "_value": [self.rh.pm.round_data_seed(self.rh)]}}
+        search_space = {'data_dir': {'_type': "choice", "_value": [self.rh.pm.data_round_seed(self.rh)]}}
         config_str = self.config()
         return config_str, search_space
 
     def fmt_train_adjust(self):
         config_str = self.config('--resume-training --load-model-path {}/seed/best_model.h5'.format(
-            self.rh.pm.round_training_seed_models(self.rh)))
-        data_dirs = [self.rh.pm.round_data_adj(self.rh)] + [self.rh.pm.round_data_adj_sp(self.rh, sp.name)
+            self.rh.pm.models_round_seed(self.rh)))
+        data_dirs = [self.rh.pm.data_round_adj(self.rh)] + [self.rh.pm.data_round_adj_sp(self.rh, sp.name)
                                                             for sp in self.rh.seed_validation_species]
         search_space = {'data_dir': {'_type': "choice", "_value": data_dirs}}
+        return config_str, search_space
+
+    def fmt_evaluations(self):
+        config_str = self.config('--eval')
+        xfold_species = self.rh.session.query(orm.Species).filter(orm.Species.split != self.rh.split).all()
+        infold_species = self.rh.session.query(orm.Species).filter(orm.Species.split == self.rh.split).all()
+        test_datas = [self.rh.pm.subset_h5(sp.name) for sp in xfold_species]
+        load_model_paths = [self.rh.pm.adj_str] + [self.rh.pm.adj_str_sp(sp.name) for sp in infold_species]
+        adj_model_path = self.rh.pm.models_round_adj(self.rh)
+        load_model_paths = [ospj(adj_model_path, adir, 'best_model.h5') for adir in load_model_paths]
+        search_space = {'test_data': {'_type': "choice", "_value": test_datas},
+                        'load_model_path': {'_type': 'choice', '_value': load_model_paths}}
         return config_str, search_space
 
     def write_to(self, config_search_space, outdir):

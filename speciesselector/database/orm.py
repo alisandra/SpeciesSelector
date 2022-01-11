@@ -29,8 +29,8 @@ class Species(Base):
 class RoundStatus(enum.Enum):
     initialized = 1  # round has been instantiated
     prepped = 2  # all symlinks and control files have been created
-    seeds_trained = 3
-    adjustments_trained = 4
+    seeds_training = 3
+    adjustments_training = 4
     evaluated = 5
 
 

@@ -51,6 +51,7 @@ def setup(working_dir, species_full, species_subset, tree, nni_config, exact_mat
     r.set_first_seeds()
     r.setup_data()
     r.setup_control_files()
+    r.start_seed_training()
     # initialize and prep first round (seed training, adjustment training, model renaming (more symlinks), eval
 
 
