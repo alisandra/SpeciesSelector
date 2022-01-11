@@ -343,17 +343,10 @@ class RoundHandler:
         return exp_id
 
     def start_seed_training(self):
-        assert self.round.status.name == "prepped"
-        # start
-        nni_dir = self.pm.nni_training_seed_round(self)
-        subprocess.run(['nnictl', 'create', '-c', self.pm.config_yml], cwd=nni_dir)
-        # copy control files to nni directory (as usual/for convenience)
-        nni_exp_id = self.cp_control_files(_from=nni_dir)
-        # record nni_id in db
-        self.round.nni_seeds_id = nni_exp_id
-        self.round.status = "seeds_training"
-        self.session.add(self.round)
-        self.session.commit()
+        self.start_nni(status_in="prepped",
+                       status_out="seeds_training",
+                       nni_dir=self.pm.nni_training_seed_round(self),
+                       record_to='nni_seeds_id')
 
     def check_and_link_seed_results(self):
         assert self.round.status.name == "seeds_training"
@@ -369,16 +362,10 @@ class RoundHandler:
         subprocess.run(['nnictl', 'stop'])
 
     def start_adj_training(self):
-        assert self.round.status == "seed_training"
-        nni_dir = self.pm.nni_training_adj_round(self)
-        subprocess.run(['nnictl', 'create', '-c', self.pm.config_yml], cwd=nni_dir)
-        # copy control files to nni directory (as usual/for convenience)
-        nni_exp_id = self.cp_control_files(_from=nni_dir)
-        self.round.nni_adjustment_id = nni_exp_id
-        # record nni_id in db
-        self.round.status = "adjustments_training"
-        self.session.add(self.round)
-        self.session.commit()
+        self.start_nni(status_in="seeds_training",
+                       status_out="adjustments_training",
+                       nni_dir=self.pm.nni_training_adj_round(self),
+                       record_to='nni_adjustment_id')
 
     def check_and_link_adj_results(self):
         assert self.round.status.name == "adjustments_training"
@@ -397,6 +384,34 @@ class RoundHandler:
             os.symlink(ospj(trial_base, trial, 'best_model.h5'), self.pm.h5_round_custom(self, full_adj_str))
         # stop nni, so that next step can be started UPDATE4SPLIT
         subprocess.run(['nnictl', 'stop'])
+
+    def start_adj_evaluation(self):
+        self.start_nni(status_in="adjustments_training",
+                       status_out="evaluating",
+                       nni_dir=self.pm.nni_evaluation_adj_round(self),
+                       record_to='nni_eval_id')
+
+    def start_nni(self, status_in, status_out, nni_dir, record_to):
+        assert self.round.status == status_in
+        subprocess.run(['nnictl', 'create', '-c', self.pm.config_yml], cwd=nni_dir)
+        # copy control files to nni directory (as usual/for convenience)
+        nni_exp_id = self.cp_control_files(_from=nni_dir)
+        # I'm sure there is a better way, but for now
+        if record_to == 'nni_seeds_id':
+            self.round.nni_seeds_id = nni_exp_id
+        elif record_to == 'nni_adjustment_id':
+            self.round.nni_adjustment_id = nni_exp_id
+        elif record_to == 'nni_eval_id':
+            self.round.nni_eval_id = nni_exp_id
+        else:
+            raise ValueError(f'unexpected/unhandled string value: {record_to} for "record_to"')
+        # record nni_id in db
+        self.round.status = status_out
+        self.session.add(self.round)
+        self.session.commit()
+
+    def check_and_process_evaluation_results(self):
+        pass  # todo
 
 
 class Configgy:

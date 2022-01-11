@@ -31,7 +31,7 @@ class RoundStatus(enum.Enum):
     prepped = 2  # all symlinks and control files have been created
     seeds_training = 3
     adjustments_training = 4
-    evaluated = 5
+    evaluating = 5
 
 
 class Round(Base):
