@@ -1,5 +1,5 @@
 from sqlalchemy.ext.declarative import declarative_base
-from sqlalchemy import Table, Column, Integer, ForeignKey, String, Enum, CheckConstraint, UniqueConstraint, Boolean, Float
+from sqlalchemy import Column, Integer, ForeignKey, String, Enum, Float
 from sqlalchemy.orm import relationship
 import enum
 

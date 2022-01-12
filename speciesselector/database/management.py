@@ -1,12 +1,13 @@
 import os
 import shutil
 import subprocess
+import time
 
 from . import orm
 from sqlalchemy import create_engine
 from sqlalchemy.orm import sessionmaker
 from ete3 import Tree
-from speciesselector.helpers import match_tree_names_plants, match_tree_names_exact
+from speciesselector.helpers import match_tree_names_plants, match_tree_names_exact, parse_eval_log
 import math
 import random
 import json
@@ -360,6 +361,7 @@ class RoundHandler:
         os.symlink(ospj(trial_base, trial, 'best_model.h5'), self.pm.h5_round_seed(self))
         # stop nni, so that next step can be started UPDATE4SPLIT
         subprocess.run(['nnictl', 'stop'])
+        time.sleep(3)  # temp patch, bc idk how to get `wait` from here...
 
     def start_adj_training(self):
         self.start_nni(status_in="seeds_training",
@@ -370,7 +372,7 @@ class RoundHandler:
     def check_and_link_adj_results(self):
         assert self.round.status.name == "adjustments_training"
         # get trial dir
-        trial_base = ospj(self.pm.nni_home, self.round.nni_seeds_id, 'trials')
+        trial_base = ospj(self.pm.nni_home, self.round.nni_adjustment_id, 'trials')
         trials = os.listdir(trial_base)
         assert len(trials) > 1, "expected multiple adjustment trials but found only {} for round{}/split{}".format(
             len(trials), self.id, self.split)
@@ -384,6 +386,7 @@ class RoundHandler:
             os.symlink(ospj(trial_base, trial, 'best_model.h5'), self.pm.h5_round_custom(self, full_adj_str))
         # stop nni, so that next step can be started UPDATE4SPLIT
         subprocess.run(['nnictl', 'stop'])
+        time.sleep(3)
 
     def start_adj_evaluation(self):
         self.start_nni(status_in="adjustments_training",
@@ -392,7 +395,7 @@ class RoundHandler:
                        record_to='nni_eval_id')
 
     def start_nni(self, status_in, status_out, nni_dir, record_to):
-        assert self.round.status == status_in
+        assert self.round.status.name == status_in, "status mismatch: {} != {}".format(self.round.status, status_in)
         subprocess.run(['nnictl', 'create', '-c', self.pm.config_yml], cwd=nni_dir)
         # copy control files to nni directory (as usual/for convenience)
         nni_exp_id = self.cp_control_files(_from=nni_dir)
@@ -411,7 +414,27 @@ class RoundHandler:
         self.session.commit()
 
     def check_and_process_evaluation_results(self):
-        pass  # todo
+        assert self.round.status.name == "evaluating"
+        # get trial dir
+        trial_base = ospj(self.pm.nni_home, self.round.nni_eval_id, 'trials')
+        trials = os.listdir(trial_base)
+        assert len(trials) > 1, "expected multiple adjustment trials but found only {} for round{}/split{}".format(
+            len(trials), self.id, self.split)
+        # link best model
+        for trial in trials:
+            # todo mv path to pm, maybe most of this loop actually
+            with open(ospj(trial_base, trial, 'parameter.cfg')) as f:
+                pars = json.load(f)
+            test_data = pars['parameters']['test_data']
+            load_model_path = pars['parameters']['load_model_path']
+            full_adj_str = load_model_path.split('/')[-2]  # -1 is best_model.h5, -2 is adj species
+            # record data/adj combo
+
+        # aggregate eval data for the round
+
+        # stop nni, so that next step can be started UPDATE4SPLIT
+        subprocess.run(['nnictl', 'stop'])
+        time.sleep(3)
 
 
 class Configgy:
@@ -436,8 +459,10 @@ class Configgy:
     def fmt_train_adjust(self):
         config_str = self.config('--resume-training --load-model-path {}'.format(
             self.rh.pm.h5_round_seed(self.rh)))
+        infold_species = self.rh.session.query(orm.Species).filter(orm.Species.split == self.rh.split).all()
+
         data_dirs = [self.rh.pm.data_round_adj(self.rh)] + [self.rh.pm.data_round_adj_sp(self.rh, sp.name)
-                                                            for sp in self.rh.seed_validation_species]
+                                                            for sp in infold_species]
         search_space = {'data_dir': {'_type': "choice", "_value": data_dirs}}
         return config_str, search_space
 

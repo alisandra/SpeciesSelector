@@ -55,11 +55,24 @@ def setup(working_dir, species_full, species_subset, tree, nni_config, exact_mat
     # initialize and prep first round (seed training, adjustment training, model renaming (more symlinks), eval
 
 
-@cli.command()
+@cli.command("next")
 @click.option('--working-dir')
-def next(working_dir):
+def ss_next(working_dir):
     click.echo(f'will setup and run next step for {working_dir}')
     # if latest round status is 2, start training seeds
+    engine, session = dbmanagement.mk_session(os.path.join(working_dir, 'spselec.sqlite3'), new_db=False)
+    latest_round_id = max(x.id for x in (session.query(orm.Round).all()))
+    r = dbmanagement.RoundHandler(session, 0, latest_round_id)
+    status = r.round.status.name
+    print(f'resuming from status "{status}"')
+    if status == "seeds_training":
+        r.check_and_link_seed_results()
+        r.start_adj_training()
+    elif status == "adjustments_training":
+        r.check_and_link_adj_results()
+        r.start_adj_evaluation()
+    elif status == "evaluating":
+        r.check_and_process_evaluation_results()
     # if 3, check and record output/nni IDs of 2, start fine tuning adjustments
     # if 4, check and record output/nni IDs of 3, start evaluation
     # if 5, check output of 4, record evaluation results, init and prep next round
