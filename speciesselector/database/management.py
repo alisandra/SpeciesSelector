@@ -384,6 +384,10 @@ class RoundHandler:
             data_dir = pars['parameters']['data_dir']
             full_adj_str = data_dir.split('/')[-1]
             os.symlink(ospj(trial_base, trial, 'best_model.h5'), self.pm.h5_round_custom(self, full_adj_str))
+            # also create a db entry for the AdjustmentModel
+            if full_adj_str == self.pm.adj_str:
+                adj_model = orm.AdjustmentModel()
+                # todo WAS HERE
         # stop nni, so that next step can be started UPDATE4SPLIT
         subprocess.run(['nnictl', 'stop'])
         time.sleep(3)

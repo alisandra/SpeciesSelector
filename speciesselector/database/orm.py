@@ -44,6 +44,7 @@ class Round(Base):
     nni_adjustment_id = Column(String)
     nni_eval_id = Column(String)
     seed_models = relationship('SeedModel', back_populates='round')
+    adjustment_models = relationship('AdjustmentModel', back_populates='round')
 
 
 class SeedTrainingSpecies(Base):
@@ -75,6 +76,7 @@ class AdjustmentModel(Base):
     __tablename__ = 'adjustment_model'
     id = Column(Integer, primary_key=True)
     round_id = Column(Integer, ForeignKey('round.id'), nullable=False)
+    round = relationship('Round', back_populates='adjustment_models')
     species_id = Column(Integer, ForeignKey('species.id'))
     delta_n_species = Column(Integer)  # -1 for removed, 0 unchanged, 1 for added
     # raw_results will be agglomerated and weighted to fill weighted columns below
