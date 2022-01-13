@@ -65,14 +65,19 @@ def ss_next(working_dir):
     r = dbmanagement.RoundHandler(session, 0, latest_round_id)
     status = r.round.status.name
     print(f'resuming from status "{status}"')
+    # if status was seeds_training, check and record output/nni IDs of above, start fine tuning adjustments
     if status == "seeds_training":
         r.check_and_link_seed_results()
         r.start_adj_training()
+    # if status was adjustment training, check and record output/nni IDs of above, start evaluation
     elif status == "adjustments_training":
         r.check_and_link_adj_results()
         r.start_adj_evaluation()
+    # if status was evaluation, check output of above, record evaluation results, init, prep and start next round
     elif status == "evaluating":
         r.check_and_process_evaluation_results()
-    # if 3, check and record output/nni IDs of 2, start fine tuning adjustments
-    # if 4, check and record output/nni IDs of 3, start evaluation
-    # if 5, check output of 4, record evaluation results, init and prep next round
+        new_r = dbmanagement.RoundHandler(session, 0, latest_round_id + 1)
+        new_r.adjust_seeds_since(r)
+        new_r.setup_data()
+        new_r.setup_control_files()
+        new_r.start_seed_training()

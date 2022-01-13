@@ -7,7 +7,7 @@ from . import orm
 from sqlalchemy import create_engine
 from sqlalchemy.orm import sessionmaker
 from ete3 import Tree
-from speciesselector.helpers import match_tree_names_plants, match_tree_names_exact, parse_eval_log
+from speciesselector.helpers import match_tree_names_plants, match_tree_names_exact, parse_eval_log, F1Decode
 import math
 import random
 import json
@@ -30,6 +30,17 @@ def mk_session(database_path, new_db=True):
     return engine, session
 
 
+class Toggle:
+    def __init__(self):
+        self._value = 0
+
+    @property
+    def value(self):
+        ret = self._value
+        self._value = 1 - self._value
+        return ret
+
+
 def add_species_from_tree(tree_path, sp_names, session, exact_match):
     newicktree = Tree(tree_path)
     tree_names = [x.name for x in newicktree.get_descendants() if x.is_leaf()]
@@ -39,14 +50,16 @@ def add_species_from_tree(tree_path, sp_names, session, exact_match):
         match_fn = match_tree_names_plants
     t2skey = match_fn(tree_names, sp_names)
     new = []
-    for d in newicktree.get_descendants():
+    toggle = Toggle()
+    splits = [toggle.value for _ in range(len(tree_names))]  # zeros and ones
+    random.shuffle(splits)
+    for i, d in enumerate(newicktree.get_descendants()):
         ancestors = d.get_ancestors()
         if d.is_leaf():
             sp_name = t2skey[d.name]
-            print(sp_name, len(ancestors))
             weight = 1 / math.log10(len(ancestors) + 1)
             new.append(
-                orm.Species(name=sp_name, split=random.choice([0, 1]), phylogenetic_weight=weight)
+                orm.Species(name=sp_name, split=splits[i], phylogenetic_weight=weight)
             )
     session.add_all(new)
     session.commit()
@@ -120,6 +133,9 @@ class PathMaker:
     @staticmethod
     def adj_str_sp(adj_sp):
         return f'adjustment_{adj_sp}'
+
+    def sp_from_adj_str(self, adj_str):
+        return re.sub(self.adj_str_sp(''), '', adj_str)  # remove "adjustment_" to leave just species
 
     # round / data related
     @mkdir_neg_p
@@ -343,6 +359,25 @@ class RoundHandler:
         shutil.copy(ospj(_from, 'config.yml'), start_dir)
         return exp_id
 
+    def start_nni(self, status_in, status_out, nni_dir, record_to):
+        assert self.round.status.name == status_in, "status mismatch: {} != {}".format(self.round.status, status_in)
+        subprocess.run(['nnictl', 'create', '-c', self.pm.config_yml], cwd=nni_dir)
+        # copy control files to nni directory (as usual/for convenience)
+        nni_exp_id = self.cp_control_files(_from=nni_dir)
+        # I'm sure there is a better way, but for now
+        if record_to == 'nni_seeds_id':
+            self.round.nni_seeds_id = nni_exp_id
+        elif record_to == 'nni_adjustment_id':
+            self.round.nni_adjustment_id = nni_exp_id
+        elif record_to == 'nni_eval_id':
+            self.round.nni_eval_id = nni_exp_id
+        else:
+            raise ValueError(f'unexpected/unhandled string value: {record_to} for "record_to"')
+        # record nni_id in db
+        self.round.status = status_out
+        self.session.add(self.round)
+        self.session.commit()
+
     def start_seed_training(self):
         self.start_nni(status_in="prepped",
                        status_out="seeds_training",
@@ -377,6 +412,7 @@ class RoundHandler:
         assert len(trials) > 1, "expected multiple adjustment trials but found only {} for round{}/split{}".format(
             len(trials), self.id, self.split)
         # link best model
+        to_add = []
         for trial in trials:
             # todo mv path to pm, maybe most of this loop actually
             with open(ospj(trial_base, trial, 'parameter.cfg')) as f:
@@ -385,37 +421,43 @@ class RoundHandler:
             full_adj_str = data_dir.split('/')[-1]
             os.symlink(ospj(trial_base, trial, 'best_model.h5'), self.pm.h5_round_custom(self, full_adj_str))
             # also create a db entry for the AdjustmentModel
-            if full_adj_str == self.pm.adj_str:
-                adj_model = orm.AdjustmentModel()
-                # todo WAS HERE
+            sp_id, delta_n_species = self.sp_id_and_delta_from_adj_str(full_adj_str)
+            adj_model = orm.AdjustmentModel(round=self.round, species_id=sp_id,
+                                            delta_n_species=delta_n_species)
+            to_add.append(adj_model)
+        self.session.add_all(to_add)
+        self.session.commit()
         # stop nni, so that next step can be started UPDATE4SPLIT
         subprocess.run(['nnictl', 'stop'])
         time.sleep(3)
+
+    def sp_id_and_delta_from_adj_str(self, adj_str):
+        """identifies adjustment species (id) and what sort of adjustment was made from filename/adj_str_sp"""
+        if adj_str == self.pm.adj_str:
+            species_id = None
+            delta_n_species = 0
+        else:
+            sp_name = self.pm.sp_from_adj_str(adj_str)
+            species = self.sp_by_name(sp_name)
+            species_id = species.id
+            if species in self.seed_training_species:
+                delta_n_species = -1
+            else:
+                delta_n_species = 1
+        return species_id, delta_n_species
+
+    def sp_by_name(self, sp_name):
+        sp = self.session.query(orm.Species).filter(orm.Species.name == sp_name).all()
+        if len(sp) == 1:
+            return sp[0]
+        else:
+            raise ValueError(f"Number of species: {sp} found matching '{sp_name}' is not 1!")
 
     def start_adj_evaluation(self):
         self.start_nni(status_in="adjustments_training",
                        status_out="evaluating",
                        nni_dir=self.pm.nni_evaluation_adj_round(self),
                        record_to='nni_eval_id')
-
-    def start_nni(self, status_in, status_out, nni_dir, record_to):
-        assert self.round.status.name == status_in, "status mismatch: {} != {}".format(self.round.status, status_in)
-        subprocess.run(['nnictl', 'create', '-c', self.pm.config_yml], cwd=nni_dir)
-        # copy control files to nni directory (as usual/for convenience)
-        nni_exp_id = self.cp_control_files(_from=nni_dir)
-        # I'm sure there is a better way, but for now
-        if record_to == 'nni_seeds_id':
-            self.round.nni_seeds_id = nni_exp_id
-        elif record_to == 'nni_adjustment_id':
-            self.round.nni_adjustment_id = nni_exp_id
-        elif record_to == 'nni_eval_id':
-            self.round.nni_eval_id = nni_exp_id
-        else:
-            raise ValueError(f'unexpected/unhandled string value: {record_to} for "record_to"')
-        # record nni_id in db
-        self.round.status = status_out
-        self.session.add(self.round)
-        self.session.commit()
 
     def check_and_process_evaluation_results(self):
         assert self.round.status.name == "evaluating"
@@ -425,20 +467,72 @@ class RoundHandler:
         assert len(trials) > 1, "expected multiple adjustment trials but found only {} for round{}/split{}".format(
             len(trials), self.id, self.split)
         # link best model
+        to_add = []
         for trial in trials:
             # todo mv path to pm, maybe most of this loop actually
             with open(ospj(trial_base, trial, 'parameter.cfg')) as f:
                 pars = json.load(f)
             test_data = pars['parameters']['test_data']
+            test_sp = self.sp_by_name(test_data.split('/')[-2])
             load_model_path = pars['parameters']['load_model_path']
             full_adj_str = load_model_path.split('/')[-2]  # -1 is best_model.h5, -2 is adj species
             # record data/adj combo
-
+            results = parse_eval_log(ospj(trial_base, trial, 'trial.log'))
+            sp_id, delta_n_species = self.sp_id_and_delta_from_adj_str(full_adj_str)
+            adjustment_model = self.session.query(orm.AdjustmentModel).\
+                filter(orm.AdjustmentModel.species_id == sp_id).\
+                filter(orm.AdjustmentModel.round_id == self.id).first()
+            raw_result = orm.RawResult(adjustment_model=adjustment_model,
+                                       test_species=test_sp,
+                                       genic_f1=results[F1Decode.GENIC],
+                                       intergenic_f1=results[F1Decode.IG],
+                                       utr_f1=results[F1Decode.UTR],
+                                       cds_f1=results[F1Decode.CDS],
+                                       intron_f1=results[F1Decode.INTRON])
+            to_add.append(raw_result)
+        self.session.add_all(to_add)
+        self.session.commit()
         # aggregate eval data for the round
-
+        to_add = []
+        for adjustment_model in self.round.adjustment_models:
+            raw_results = adjustment_model.raw_results
+            for f1_str in ["genic_f1", "intergenic_f1", "utr_f1", "cds_f1", "intron_f1"]:
+                weighted = self.aggregate_res(f1_str, raw_results)
+                adjustment_model.__setattr__(f"weighted_test_{f1_str}", weighted)
+            to_add.append(adjustment_model)
+        self.session.add_all(to_add)
+        self.session.commit()
         # stop nni, so that next step can be started UPDATE4SPLIT
         subprocess.run(['nnictl', 'stop'])
         time.sleep(3)
+
+    @staticmethod
+    def aggregate_res(f1_str, results):
+        weights = [res.test_species.phylogenetic_weight for res in results]
+        f1s = [res.__getattr__(f1_str) for res in results]
+        # divide by weights and not N so that weighted values can be compared _between_ splits
+        weighted_res = sum([f1 * w for f1, w in zip(weights, f1s)]) / sum(weights)
+        return weighted_res
+
+    def adjust_seeds_since(self, prev_round):
+        prev_models = prev_round.round.adjustment_models
+        trainers = [x for x in prev_round.seed_training_species]
+        # sort descending genic f1
+        sorted_prev = sorted(prev_models, key=lambda x: - x.weightsd_test_genic_f1)
+        for adj_model in sorted_prev:
+            # consider only improvements, so quit once the un-changed model has been found
+            if adj_model.delta_n_species == 0:
+                break
+            elif adj_model.delta_n_species == 1:
+                trainers.append(adj_model.species)
+            elif adj_model.delta_n_species == -1:
+                trainers = [x for x in trainers if x != adj_model.species]
+        # add seed model & seed trainers to db
+        seed_model = orm.SeedModel(split=self.split, round=self.round)
+        seed_trainers = [orm.SeedTrainingSpecies(species=s, seed_model=seed_model) for s in trainers]
+        self.session.add(seed_model)
+        self.session.add_all(seed_trainers)
+        self.session.commit()
 
 
 class Configgy:

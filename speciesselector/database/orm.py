@@ -78,8 +78,9 @@ class AdjustmentModel(Base):
     round_id = Column(Integer, ForeignKey('round.id'), nullable=False)
     round = relationship('Round', back_populates='adjustment_models')
     species_id = Column(Integer, ForeignKey('species.id'))
+    species = relationship('Species')
     delta_n_species = Column(Integer)  # -1 for removed, 0 unchanged, 1 for added
-    # raw_results will be agglomerated and weighted to fill weighted columns below
+    # raw_results will be aggregated and weighted to fill weighted columns below
     raw_results = relationship('RawResult', back_populates='adjustment_model')
     weighted_test_genic_f1 = Column(Float)
     weighted_test_intergenic_f1 = Column(Float)
