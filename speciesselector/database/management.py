@@ -53,7 +53,8 @@ def add_species_from_tree(tree_path, sp_names, session, exact_match):
     toggle = Toggle()
     splits = [toggle.value for _ in range(len(tree_names))]  # zeros and ones
     random.shuffle(splits)
-    for i, d in enumerate(newicktree.get_descendants()):
+    i = 0
+    for d in newicktree.get_descendants():
         ancestors = d.get_ancestors()
         if d.is_leaf():
             sp_name = t2skey[d.name]
@@ -61,6 +62,7 @@ def add_species_from_tree(tree_path, sp_names, session, exact_match):
             new.append(
                 orm.Species(name=sp_name, split=splits[i], phylogenetic_weight=weight)
             )
+            i += 1
     session.add_all(new)
     session.commit()
 
@@ -243,6 +245,17 @@ class PathMaker:
         return ospj(self.models_round(rnd), custom, model)
 
 
+def robust_4_me_symlink(src, dest):
+    # overwrite a destination symlink (and only symlink)
+    if os.path.exists(dest):
+        if os.path.islink(dest):
+            os.remove(dest)
+    # make sure that what one is linking to in fact exists
+    # (for the sake of throwing a timely error if something isn't working)
+    assert os.path.exists(src), f"file to link to: {src} not found"
+    os.symlink(src, dest)
+
+
 class RoundHandler:
     def __init__(self, session, split, id):
         self.session = session
@@ -262,12 +275,13 @@ class RoundHandler:
         else:
             raise ValueError(f"{len(rounds)} rounds found with id {id}???")
 
-    def set_first_seeds(self, n_seeds=8):
+    def set_first_seeds(self, max_n_seeds=8):
         # get all species in set
         set_sp = self.session.query(orm.Species).filter(orm.Species.split == self.split).all()
+        max_n_seeds = min(max_n_seeds, len(set_sp) // 2)  # leave at least half for validation
         # select trainers
         random.shuffle(set_sp)
-        trainers = set_sp[:n_seeds]
+        trainers = set_sp[:max_n_seeds]
         # setup seed model & seed trainers
         seed_model = orm.SeedModel(split=self.split, round=self.round)
         seed_trainers = [orm.SeedTrainingSpecies(species=s, seed_model=seed_model) for s in trainers]
@@ -311,29 +325,29 @@ class RoundHandler:
 
         for sp in seed_sp_t:
             # for seed train
-            os.symlink(self.pm.full_h5(sp.name), dest(seed_dir, sp.name))
+            robust_4_me_symlink(self.pm.full_h5(sp.name), dest(seed_dir, sp.name))
             # for fine-tuning w/o changing species, but w/ subset etc to match other adjustments
-            os.symlink(self.pm.subset_h5(sp.name), dest(adj_dir, sp.name))
+            robust_4_me_symlink(self.pm.subset_h5(sp.name), dest(adj_dir, sp.name))
         for sp in seed_sp_v:
-            os.symlink(self.pm.subset_h5(sp.name), dest(seed_dir, sp.name, is_train=False))
-            os.symlink(self.pm.subset_h5(sp.name), dest(adj_dir, sp.name, is_train=False))
+            robust_4_me_symlink(self.pm.subset_h5(sp.name), dest(seed_dir, sp.name, is_train=False))
+            robust_4_me_symlink(self.pm.subset_h5(sp.name), dest(adj_dir, sp.name, is_train=False))
         # setup adjusted data
         # one by one addition of validation species to train
         for adj_sp in seed_sp_v:
             adj_sp_dir = self.pm.data_round_adj_sp(self, adj_sp.name)
             for sp in seed_sp_t + [adj_sp]:  # same trainers as seed + adjustment species
-                os.symlink(self.pm.subset_h5(sp.name), dest(adj_sp_dir, sp.name))
+                robust_4_me_symlink(self.pm.subset_h5(sp.name), dest(adj_sp_dir, sp.name))
             for sp in seed_sp_v:
                 if not sp == adj_sp:  # same validators as seed - adjustment species
-                    os.symlink(self.pm.subset_h5(sp.name), dest(adj_sp_dir, sp.name, is_train=False))
+                    robust_4_me_symlink(self.pm.subset_h5(sp.name), dest(adj_sp_dir, sp.name, is_train=False))
         # one by one drop of training species from train
         for adj_sp in seed_sp_t:
             adj_sp_dir = self.pm.data_round_adj_sp(self, adj_sp.name)
             for sp in seed_sp_t:
                 if not sp == adj_sp:  # - adjustment species from train
-                    os.symlink(self.pm.subset_h5(sp.name), dest(adj_sp_dir, sp.name))
+                    robust_4_me_symlink(self.pm.subset_h5(sp.name), dest(adj_sp_dir, sp.name))
             for sp in seed_sp_v + [adj_sp]:  # + adjustment species to val
-                os.symlink(self.pm.subset_h5(sp.name), dest(adj_sp_dir, sp.name, is_train=False))
+                robust_4_me_symlink(self.pm.subset_h5(sp.name), dest(adj_sp_dir, sp.name, is_train=False))
 
     def setup_control_files(self):
         # train seed
@@ -393,7 +407,7 @@ class RoundHandler:
             self.id, self.split)
         trial = trials[0]
         # link best model
-        os.symlink(ospj(trial_base, trial, 'best_model.h5'), self.pm.h5_round_seed(self))
+        robust_4_me_symlink(ospj(trial_base, trial, 'best_model.h5'), self.pm.h5_round_seed(self))
         # stop nni, so that next step can be started UPDATE4SPLIT
         subprocess.run(['nnictl', 'stop'])
         time.sleep(3)  # temp patch, bc idk how to get `wait` from here...
@@ -419,7 +433,7 @@ class RoundHandler:
                 pars = json.load(f)
             data_dir = pars['parameters']['data_dir']
             full_adj_str = data_dir.split('/')[-1]
-            os.symlink(ospj(trial_base, trial, 'best_model.h5'), self.pm.h5_round_custom(self, full_adj_str))
+            robust_4_me_symlink(ospj(trial_base, trial, 'best_model.h5'), self.pm.h5_round_custom(self, full_adj_str))
             # also create a db entry for the AdjustmentModel
             sp_id, delta_n_species = self.sp_id_and_delta_from_adj_str(full_adj_str)
             adj_model = orm.AdjustmentModel(round=self.round, species_id=sp_id,
@@ -482,6 +496,7 @@ class RoundHandler:
             adjustment_model = self.session.query(orm.AdjustmentModel).\
                 filter(orm.AdjustmentModel.species_id == sp_id).\
                 filter(orm.AdjustmentModel.round_id == self.id).first()
+            print(results)
             raw_result = orm.RawResult(adjustment_model=adjustment_model,
                                        test_species=test_sp,
                                        genic_f1=results[F1Decode.GENIC],
