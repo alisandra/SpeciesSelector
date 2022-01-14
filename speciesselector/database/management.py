@@ -269,7 +269,7 @@ class RoundHandler:
         if len(rounds) == 1:
             self.round = rounds[0]  # use existing if there
         elif len(rounds) == 0:
-            self.round = orm.Round(id=id, status="initialized")  # create if there is none
+            self.round = orm.Round(id=id, status="initialized", split=split)  # create if there is none
             session.add(self.round)
             session.commit()
         else:

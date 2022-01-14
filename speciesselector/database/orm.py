@@ -40,6 +40,7 @@ class Round(Base):
 
     id = Column(Integer, primary_key=True)
     status = Column(Enum(RoundStatus))
+    split = Column(Integer)
     nni_seeds_id = Column(String)
     nni_adjustment_id = Column(String)
     nni_eval_id = Column(String)

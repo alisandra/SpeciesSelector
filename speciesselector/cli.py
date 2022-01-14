@@ -46,13 +46,15 @@ def setup(working_dir, species_full, species_subset, tree, nni_config, exact_mat
     # this is so that the trained models are selected for lower phylogenetic bias than the input data
     # this also splits species into sets (2)
     dbmanagement.add_species_from_tree(tree, list_full, session, exact_match)
-    # randomly select training seed species for each set
-    r = dbmanagement.RoundHandler(session, 0, 0)
-    r.set_first_seeds()
-    r.setup_data()
-    r.setup_control_files()
-    r.start_seed_training()
-    # initialize and prep first round (seed training, adjustment training, model renaming (more symlinks), eval
+    for split in [0, 1]:
+        # ID to split because it needs to make two _different_ rounds at the start (should clean)
+        r = dbmanagement.RoundHandler(session, split=split, id=split)
+        # randomly select training seed species for each set
+        r.set_first_seeds()
+        # initialize and prep first round (seed training, adjustment training, model renaming (more symlinks), eval
+        r.setup_data()
+        r.setup_control_files()
+        r.start_seed_training()
 
 
 @cli.command("next")
@@ -61,23 +63,24 @@ def ss_next(working_dir):
     click.echo(f'will setup and run next step for {working_dir}')
     # if latest round status is 2, start training seeds
     engine, session = dbmanagement.mk_session(os.path.join(working_dir, 'spselec.sqlite3'), new_db=False)
-    latest_round_id = max(x.id for x in (session.query(orm.Round).all()))
-    r = dbmanagement.RoundHandler(session, 0, latest_round_id)
-    status = r.round.status.name
-    print(f'resuming from status "{status}"')
-    # if status was seeds_training, check and record output/nni IDs of above, start fine tuning adjustments
-    if status == "seeds_training":
-        r.check_and_link_seed_results()
-        r.start_adj_training()
-    # if status was adjustment training, check and record output/nni IDs of above, start evaluation
-    elif status == "adjustments_training":
-        r.check_and_link_adj_results()
-        r.start_adj_evaluation()
-    # if status was evaluation, check output of above, record evaluation results, init, prep and start next round
-    elif status == "evaluating":
-        r.check_and_process_evaluation_results()
-        new_r = dbmanagement.RoundHandler(session, 0, latest_round_id + 1)
-        new_r.adjust_seeds_since(r)
-        new_r.setup_data()
-        new_r.setup_control_files()
-        new_r.start_seed_training()
+    for split in [0, 1]:
+        latest_round_id = max(x.id for x in (session.query(orm.Round).filter(orm.Round.split == split).all()))
+        r = dbmanagement.RoundHandler(session, split, latest_round_id)
+        status = r.round.status.name
+        print(f'resuming from status "{status}"')
+        # if status was seeds_training, check and record output/nni IDs of above, start fine tuning adjustments
+        if status == "seeds_training":
+            r.check_and_link_seed_results()
+            r.start_adj_training()
+        # if status was adjustment training, check and record output/nni IDs of above, start evaluation
+        elif status == "adjustments_training":
+            r.check_and_link_adj_results()
+            r.start_adj_evaluation()
+        # if status was evaluation, check output of above, record evaluation results, init, prep and start next round
+        elif status == "evaluating":
+            r.check_and_process_evaluation_results()
+            new_r = dbmanagement.RoundHandler(session, split, latest_round_id + 1)
+            new_r.adjust_seeds_since(r)
+            new_r.setup_data()
+            new_r.setup_control_files()
+            new_r.start_seed_training()
