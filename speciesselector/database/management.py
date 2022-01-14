@@ -261,7 +261,7 @@ class RoundHandler:
         self.session = session
         self.split = split
         self.id = id
-
+        self.base_port = 8080  # todo, parameterize to allow user flexible port usage
         self.pm = PathMaker(session)
 
         # check for existing round
@@ -292,8 +292,9 @@ class RoundHandler:
     @property
     def seed_model(self):
         seed_model = self.session.query(orm.SeedModel).filter(orm.SeedModel.round_id == self.id).\
-            filter(orm.SeedModel.split == self.split).all()[0]
-        return seed_model
+            filter(orm.SeedModel.split == self.split).all()
+        assert len(seed_model) == 1, f"{len(seed_model)} != 1, seed models found?..."
+        return seed_model[0]
 
     @property
     def seed_training_species(self):
@@ -365,17 +366,43 @@ class RoundHandler:
         self.session.commit()
 
     def cp_control_files(self, _from):
-        experiment_json = subprocess.check_output(['nnictl', 'experiment', 'show'])
-        exp_id = json.loads(experiment_json)['id']
+        exp_id = self.get_nni_id()
         start_dir = ospj(self.pm.nni_home, exp_id, 'start')
         os.mkdir(start_dir)
         shutil.copy(ospj(_from, 'search_space.json'), start_dir)
         shutil.copy(ospj(_from, 'config.yml'), start_dir)
         return exp_id
 
+    @property
+    def port(self):
+        """port for nni, so that splits can run simultaneously and later have results assigned correctly"""
+        return self.base_port + self.split
+
+    def get_nni_id(self):
+        experiment_list = subprocess.check_output(['nnictl', 'experiment', 'list'])
+        # output looks something like the following
+        # ----------------------------------------------------------------------------------------
+        #                 Experiment information
+        # Id: LKx2sAhe    Name: spselec    Status: TUNER_NO_MORE_TRIAL    Port: 8080    Platform: local    StartTime: 2022-01-14 10:15:14    EndTime: N/A
+        # Id: loi0MuG2    Name: spselec    Status: TUNER_NO_MORE_TRIAL    Port: 8081    Platform: local    StartTime: 2022-01-14 10:21:24    EndTime: N/A
+        #
+        # ----------------------------------------------------------------------------------------
+        # which experiment is correct can be determined by the port
+        experiment_list = experiment_list.decode('utf8')
+        port = str(self.port)
+        for line in experiment_list.split('\n'):
+            target = f'.*Port:\W*{port}'
+            if re.match(target, line):
+                res = re.sub('Id:\\W*', '', line)  # truncate from start
+                res = re.sub('\\W*Name.*', '', res)  # truncate everything after nni id
+                return res
+        print('Could not parse experiment ID from:\n')
+        print(experiment_list)
+        raise ValueError()
+
     def start_nni(self, status_in, status_out, nni_dir, record_to):
         assert self.round.status.name == status_in, "status mismatch: {} != {}".format(self.round.status, status_in)
-        subprocess.run(['nnictl', 'create', '-c', self.pm.config_yml], cwd=nni_dir)
+        subprocess.run(['nnictl', 'create', '-c', self.pm.config_yml, '-p', str(self.port)], cwd=nni_dir)
         # copy control files to nni directory (as usual/for convenience)
         nni_exp_id = self.cp_control_files(_from=nni_dir)
         # I'm sure there is a better way, but for now
@@ -391,6 +418,11 @@ class RoundHandler:
         self.round.status = status_out
         self.session.add(self.round)
         self.session.commit()
+
+    def stop_nni(self):
+        # stop nni, so that next step can be started
+        subprocess.run(['nnictl', 'stop', self.get_nni_id()])
+        time.sleep(5)  # temp patch, bc idk how to get `wait` from here...
 
     def start_seed_training(self):
         self.start_nni(status_in="prepped",
@@ -408,9 +440,7 @@ class RoundHandler:
         trial = trials[0]
         # link best model
         robust_4_me_symlink(ospj(trial_base, trial, 'best_model.h5'), self.pm.h5_round_seed(self))
-        # stop nni, so that next step can be started UPDATE4SPLIT
-        subprocess.run(['nnictl', 'stop'])
-        time.sleep(3)  # temp patch, bc idk how to get `wait` from here...
+        self.stop_nni()
 
     def start_adj_training(self):
         self.start_nni(status_in="seeds_training",
@@ -436,14 +466,18 @@ class RoundHandler:
             robust_4_me_symlink(ospj(trial_base, trial, 'best_model.h5'), self.pm.h5_round_custom(self, full_adj_str))
             # also create a db entry for the AdjustmentModel
             sp_id, delta_n_species = self.sp_id_and_delta_from_adj_str(full_adj_str)
-            adj_model = orm.AdjustmentModel(round=self.round, species_id=sp_id,
-                                            delta_n_species=delta_n_species)
-            to_add.append(adj_model)
+            # check if we've already recorded this (e.g. bc we're restarting failed run)
+            existing_matches = self.session.query(orm.AdjustmentModel).\
+                filter(orm.AdjustmentModel.round_id == self.id).\
+                filter(orm.AdjustmentModel.species_id == sp_id).all()
+            print(existing_matches, '<- existing matches')
+            if not existing_matches:
+                adj_model = orm.AdjustmentModel(round=self.round, species_id=sp_id,
+                                                delta_n_species=delta_n_species, seed_model=self.seed_model)
+                to_add.append(adj_model)
         self.session.add_all(to_add)
         self.session.commit()
-        # stop nni, so that next step can be started UPDATE4SPLIT
-        subprocess.run(['nnictl', 'stop'])
-        time.sleep(3)
+        self.stop_nni()
 
     def sp_id_and_delta_from_adj_str(self, adj_str):
         """identifies adjustment species (id) and what sort of adjustment was made from filename/adj_str_sp"""
@@ -495,36 +529,44 @@ class RoundHandler:
             sp_id, delta_n_species = self.sp_id_and_delta_from_adj_str(full_adj_str)
             adjustment_model = self.session.query(orm.AdjustmentModel).\
                 filter(orm.AdjustmentModel.species_id == sp_id).\
-                filter(orm.AdjustmentModel.round_id == self.id).first()
+                filter(orm.AdjustmentModel.round_id == self.id).all()
+            assert len(adjustment_model) == 1, f"{len(adjustment_model)} adjustment model found for {sp_id} in round {self.id}"
+            adjustment_model = adjustment_model[0]
             print(results)
-            raw_result = orm.RawResult(adjustment_model=adjustment_model,
-                                       test_species=test_sp,
-                                       genic_f1=results[F1Decode.GENIC],
-                                       intergenic_f1=results[F1Decode.IG],
-                                       utr_f1=results[F1Decode.UTR],
-                                       cds_f1=results[F1Decode.CDS],
-                                       intron_f1=results[F1Decode.INTRON])
-            to_add.append(raw_result)
+            # check if we've already recorded this (e.g. bc we're restarting failed run
+            existing_matches = self.session.query(orm.RawResult).\
+                filter(orm.RawResult.adjustment_model_id == adjustment_model.id).\
+                filter(orm.RawResult.test_species_id == test_sp.id).all()
+            if not existing_matches:
+                raw_result = orm.RawResult(adjustment_model=adjustment_model,
+                                           test_species=test_sp,
+                                           genic_f1=results[F1Decode.GENIC],
+                                           intergenic_f1=results[F1Decode.IG],
+                                           utr_f1=results[F1Decode.UTR],
+                                           cds_f1=results[F1Decode.CDS],
+                                           intron_f1=results[F1Decode.INTRON])
+                to_add.append(raw_result)
         self.session.add_all(to_add)
         self.session.commit()
         # aggregate eval data for the round
         to_add = []
         for adjustment_model in self.round.adjustment_models:
             raw_results = adjustment_model.raw_results
+            print(adjustment_model)
             for f1_str in ["genic_f1", "intergenic_f1", "utr_f1", "cds_f1", "intron_f1"]:
                 weighted = self.aggregate_res(f1_str, raw_results)
-                adjustment_model.__setattr__(f"weighted_test_{f1_str}", weighted)
+                adjustment_model.set_attr_by_name(f"weighted_test_{f1_str}", weighted)
             to_add.append(adjustment_model)
         self.session.add_all(to_add)
         self.session.commit()
-        # stop nni, so that next step can be started UPDATE4SPLIT
-        subprocess.run(['nnictl', 'stop'])
-        time.sleep(3)
+        self.stop_nni()
 
     @staticmethod
     def aggregate_res(f1_str, results):
         weights = [res.test_species.phylogenetic_weight for res in results]
-        f1s = [res.__getattr__(f1_str) for res in results]
+        print(weights, '<- weights')
+        f1s = [res.get_attr_by_name(f1_str) for res in results]
+        print(f1s, '<- f1s')
         # divide by weights and not N so that weighted values can be compared _between_ splits
         weighted_res = sum([f1 * w for f1, w in zip(weights, f1s)]) / sum(weights)
         return weighted_res
@@ -533,7 +575,7 @@ class RoundHandler:
         prev_models = prev_round.round.adjustment_models
         trainers = [x for x in prev_round.seed_training_species]
         # sort descending genic f1
-        sorted_prev = sorted(prev_models, key=lambda x: - x.weightsd_test_genic_f1)
+        sorted_prev = sorted(prev_models, key=lambda x: - x.weighted_test_genic_f1)
         for adj_model in sorted_prev:
             # consider only improvements, so quit once the un-changed model has been found
             if adj_model.delta_n_species == 0:
@@ -545,6 +587,10 @@ class RoundHandler:
         # add seed model & seed trainers to db
         seed_model = orm.SeedModel(split=self.split, round=self.round)
         seed_trainers = [orm.SeedTrainingSpecies(species=s, seed_model=seed_model) for s in trainers]
+        in_split = self.session.query(orm.Species).filter(orm.Species.split == self.split).all()
+        if len(seed_trainers) >= len(in_split) - 1:
+            print('WARNING: less than 2 validation species remaining. Training of Seed and /or adjustment will fail'
+                  'due to lack of validation data. This round cannot be completed.')
         self.session.add(seed_model)
         self.session.add_all(seed_trainers)
         self.session.commit()

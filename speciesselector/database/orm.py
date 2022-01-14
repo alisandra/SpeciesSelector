@@ -65,10 +65,7 @@ class SeedModel(Base):
     round = relationship('Round', back_populates='seed_models')
     split = Column(Integer)  # could also be derived from species below
     seed_training_species = relationship('SeedTrainingSpecies', back_populates='seed_model')
-
-    @property
-    def seed_validation_species(self):
-        pass
+    adjustment_models = relationship('AdjustmentModel', back_populates='seed_model')
 
 
 class AdjustmentModel(Base):
@@ -77,6 +74,8 @@ class AdjustmentModel(Base):
     id = Column(Integer, primary_key=True)
     round_id = Column(Integer, ForeignKey('round.id'), nullable=False)
     round = relationship('Round', back_populates='adjustment_models')
+    seed_model_id = Column(Integer, ForeignKey('seed_model.id'), nullable=False)
+    seed_model = relationship('SeedModel', back_populates='adjustment_models')
     species_id = Column(Integer, ForeignKey('species.id'))
     species = relationship('Species')
     delta_n_species = Column(Integer)  # -1 for removed, 0 unchanged, 1 for added
@@ -87,6 +86,29 @@ class AdjustmentModel(Base):
     weighted_test_utr_f1 = Column(Float)
     weighted_test_cds_f1 = Column(Float)
     weighted_test_intron_f1 = Column(Float)
+
+    def set_attr_by_name(self, name, val):
+        # I hear sqlalchemy needs their own __setattr__ and also masks it
+        # so a (somewhat cringe-worthy) work around
+        if name == "weighted_test_genic_f1":
+            self.weighted_test_genic_f1 = val
+        elif name == "weighted_test_intergenic_f1":
+            self.weighted_test_intergenic_f1 = val
+        elif name == "weighted_test_utr_f1":
+            self.weighted_test_utr_f1 = val
+        elif name == "weighted_test_cds_f1":
+            self.weighted_test_cds_f1 = val
+        elif name == "weighted_test_intron_f1":
+            self.weighted_test_intron_f1 = val
+        else:
+            raise AttributeError(f"cannot set attribute: {name} by string")
+
+    def __repr__(self):
+        if self.species is not None:
+            sp_name = self.species.name
+        else:
+            sp_name = None
+        return f'AdjustmentModel for round {self.round_id}, split {self.seed_model.split} species {sp_name}'
 
 
 class RawResult(Base):
@@ -103,3 +125,21 @@ class RawResult(Base):
     utr_f1 = Column(Float)
     cds_f1 = Column(Float)
     intron_f1 = Column(Float)
+
+    def get_attr_by_name(self, name):
+        # again, bc __getattr__ doesn't work normally in sqlalchemy and I haven't found the 'right' way yet
+        if name == "genic_f1":
+            return self.genic_f1
+        elif name == "intergenic_f1":
+            return self.intergenic_f1
+        elif name == "utr_f1":
+            return self.utr_f1
+        elif name == "cds_f1":
+            return self.cds_f1
+        elif name == "intron_f1":
+            return self.intron_f1
+        else:
+            raise AttributeError(f"unrecognized attribute {name}")
+
+    def __repr__(self):
+        return f'RawResult of {self.adjustment_model}\n on test species {self.test_species.name}'
