@@ -1,9 +1,12 @@
+import json
+
 import click
 import os
 from .database import management as dbmanagement
 from .database import orm
 import shutil
-
+import pandas as pd
+from .filtering.filter import UTRFilter, BuscoFilter, AltSpliceFilter, exemptions_as_sp_names
 
 @click.group()
 def cli():
@@ -84,3 +87,36 @@ def ss_next(working_dir):
             new_r.setup_data()
             new_r.setup_control_files()
             new_r.start_seed_training()
+
+
+@cli.command()
+@click.option('--meta-csv', required=True)
+@click.option('--geenuff-csv', required=True)
+@click.option('--file-out', required=True)
+@click.option('--alt-splice-min', help='minimum alternative transcripts / gene', default=0.001)
+@click.option('--utr-min', help='minimum utr/expected utr (expected is mRNA * 2)', default=0.01)
+@click.option('--busco-loss-max', help='maximum drop in complete buscos between proteome and genome', default=0.05)
+@click.option('--exempt', help='json string with {rule name: [phylo groups, ...], ...} '
+                               'that are exempted from filtering. Rule names are "UTR", "busco", "altsplice". '
+                               'see filtering/filter/exemptions_as_sp_names for more info.',
+              default='{}')
+@click.option('--tree')
+def metafilter(meta_csv, geenuff_csv, file_out, alt_splice_min, utr_min, busco_loss_max, exempt, tree):
+    exempt_dict = json.loads(exempt)
+    if exempt_dict:
+        assert tree is not None, "if '--exempt' is set, a phylogenetic tree is required under '--tree'"
+    meta_dat = pd.read_csv(meta_csv)
+    geenuff_dat = pd.read_csv(geenuff_csv)
+
+    remaining = list(meta_dat.loc[:, 'species'])
+    exemptions = exemptions_as_sp_names(exempt_dict, remaining, tree_path=tree)
+    as_filt = AltSpliceFilter(dat=geenuff_dat, threshold=alt_splice_min, exempt=exemptions['altsplice'])
+    utr_filt = UTRFilter(dat=geenuff_dat, threshold=utr_min, exempt=exemptions['UTR'])
+    busco_filt = BuscoFilter(dat=meta_dat, threshold=busco_loss_max, exempt=exemptions['busco'])
+
+    for filt in [as_filt, utr_filt, busco_filt]:
+        print(len(remaining))
+        remaining = filt.filter(remaining)
+    print(len(remaining))
+    with open(file_out, 'w') as f:
+        f.write('\n'.join(remaining))
