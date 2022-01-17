@@ -1,7 +1,7 @@
 import pandas
 import pandas as pd
 from collections import defaultdict
-from speciesselector.helpers import match_tree_names_plants
+from speciesselector.helpers import match_tree_names_plants, match_tree_names_exact
 import ete3
 
 
@@ -51,10 +51,14 @@ class BuscoFilter(Filter):
         return busco_loss > -self.threshold
 
 
-def exemptions_as_sp_names(exemption_dict, sp_names, tree_path):
+def exemptions_as_sp_names(exemption_dict, sp_names, tree_path, exact_match=False):
     tree = ete3.Tree(tree_path)
     tree_names = [x.name for x in tree.get_leaves()]
-    t2skey = match_tree_names_plants(tree_names, sp_names)
+    if exact_match:
+        match_fn = match_tree_names_exact
+    else:
+        match_fn = match_tree_names_plants
+    t2skey = match_fn(tree_names, sp_names)
 
     # typical exemption_dict: {"altsplice": ["Porphyra umbilicalis - 2786", "Chlorophyta - 3041"]}
     # to figure out exact names, use ete3.Tree.show()!

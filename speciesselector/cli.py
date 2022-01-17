@@ -20,13 +20,23 @@ def cli():
 @click.option('--tree', required=True)
 @click.option('--nni-config', required=True)
 @click.option('--exact-match', is_flag=True)
-def setup(working_dir, species_full, species_subset, tree, nni_config, exact_match):
+@click.option('--passed-meta-filter', help='output of spselect metafilter')
+def setup(working_dir, species_full, species_subset, tree, nni_config, exact_match, passed_meta_filter):
     """prepares sqlitedb, species weighting and splitting, etc for later use"""
     # check naming in species full/subset that everything matches
     list_full = os.listdir(species_full)
     list_subset = os.listdir(species_subset)
     for full, subset in zip(sorted(list_full), sorted(list_subset)):
         assert full == subset, f"{full} != {subset} when confirming matching species between directories"
+
+    # take all if filtered aren't supplied
+    if passed_meta_filter is None:
+        quality_sp = list_full.copy()
+    else:
+        quality_sp = []
+        with open(passed_meta_filter) as f:
+            for line in f:
+                quality_sp.append(line.rstrip())
 
     # setup db, as well as nni config and search space template
     if not os.path.exists(working_dir):
@@ -48,7 +58,7 @@ def setup(working_dir, species_full, species_subset, tree, nni_config, exact_mat
     # assign weight to species according to depth in tree (deeper, where more species are, is lower)
     # this is so that the trained models are selected for lower phylogenetic bias than the input data
     # this also splits species into sets (2)
-    dbmanagement.add_species_from_tree(tree, list_full, session, exact_match)
+    dbmanagement.add_species_from_tree(tree, list_full, session, exact_match, quality_sp)
     for split in [0, 1]:
         # ID to split because it needs to make two _different_ rounds at the start (should clean)
         r = dbmanagement.RoundHandler(session, split=split, id=split)
@@ -101,7 +111,8 @@ def ss_next(working_dir):
                                'see filtering/filter/exemptions_as_sp_names for more info.',
               default='{}')
 @click.option('--tree')
-def metafilter(meta_csv, geenuff_csv, file_out, alt_splice_min, utr_min, busco_loss_max, exempt, tree):
+@click.option('--exact-match', is_flag=True)
+def metafilter(meta_csv, geenuff_csv, file_out, alt_splice_min, utr_min, busco_loss_max, exempt, tree, exact_match):
     exempt_dict = json.loads(exempt)
     if exempt_dict:
         assert tree is not None, "if '--exempt' is set, a phylogenetic tree is required under '--tree'"
@@ -109,7 +120,7 @@ def metafilter(meta_csv, geenuff_csv, file_out, alt_splice_min, utr_min, busco_l
     geenuff_dat = pd.read_csv(geenuff_csv)
 
     remaining = list(meta_dat.loc[:, 'species'])
-    exemptions = exemptions_as_sp_names(exempt_dict, remaining, tree_path=tree)
+    exemptions = exemptions_as_sp_names(exempt_dict, remaining, tree_path=tree, exact_match=exact_match)
     as_filt = AltSpliceFilter(dat=geenuff_dat, threshold=alt_splice_min, exempt=exemptions['altsplice'])
     utr_filt = UTRFilter(dat=geenuff_dat, threshold=utr_min, exempt=exemptions['UTR'])
     busco_filt = BuscoFilter(dat=meta_dat, threshold=busco_loss_max, exempt=exemptions['busco'])

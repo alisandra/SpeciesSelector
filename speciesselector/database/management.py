@@ -41,7 +41,7 @@ class Toggle:
         return ret
 
 
-def add_species_from_tree(tree_path, sp_names, session, exact_match):
+def add_species_from_tree(tree_path, sp_names, session, exact_match, quality_sp):
     newicktree = Tree(tree_path)
     tree_names = [x.name for x in newicktree.get_descendants() if x.is_leaf()]
     if exact_match:
@@ -54,15 +54,15 @@ def add_species_from_tree(tree_path, sp_names, session, exact_match):
     splits = [toggle.value for _ in range(len(tree_names))]  # zeros and ones
     random.shuffle(splits)
     i = 0
-    for d in newicktree.get_descendants():
+    for d in newicktree.get_leaves():
         ancestors = d.get_ancestors()
-        if d.is_leaf():
-            sp_name = t2skey[d.name]
-            weight = 1 / math.log10(len(ancestors) + 1)
-            new.append(
-                orm.Species(name=sp_name, split=splits[i], phylogenetic_weight=weight)
-            )
-            i += 1
+        sp_name = t2skey[d.name]
+        weight = 1 / math.log10(len(ancestors) + 1)
+        new.append(
+            orm.Species(name=sp_name, split=splits[i], phylogenetic_weight=weight,
+                        is_quality=sp_name in quality_sp)
+        )
+        i += 1
     session.add_all(new)
     session.commit()
 
@@ -186,17 +186,6 @@ class PathMaker:
     @mkdir_neg_p
     def nni_evaluation_adj(self):
         return ospj(self.nni, self.eval_str, self.adj_str)
-    #@mkdir_neg_p
-    #def round_training(self, rnd):
-    #    return ospj(self.round(rnd), self.training_str)
-
-    #@mkdir_neg_p
-    #def round_training_seed(self, rnd):
-    #    return ospj(self.round_training(rnd), self.seed_str)
-
-    #@mkdir_neg_p
-    #def round_training_adj(self, rnd):
-    #    return ospj(self.round_training(rnd), self.adj_str)
 
     @mkdir_neg_p
     def nni_training_seed_round(self, rnd):
@@ -277,7 +266,8 @@ class RoundHandler:
 
     def set_first_seeds(self, max_n_seeds=8):
         # get all species in set
-        set_sp = self.session.query(orm.Species).filter(orm.Species.split == self.split).all()
+        set_sp = self.session.query(orm.Species).filter(orm.Species.split == self.split).\
+            filter(orm.Species.is_quality).all()
         max_n_seeds = min(max_n_seeds, len(set_sp) // 2)  # leave at least half for validation
         # select trainers
         random.shuffle(set_sp)
@@ -302,7 +292,8 @@ class RoundHandler:
 
     @property
     def seed_validation_species(self):
-        split_sp = self.session.query(orm.Species).filter(orm.Species.split == self.split).all()
+        split_sp = self.session.query(orm.Species).filter(orm.Species.split == self.split).\
+            filter(orm.Species.is_quality).all()
         return [sp for sp in split_sp if sp not in self.seed_training_species]
 
     def setup_data(self):
@@ -587,7 +578,8 @@ class RoundHandler:
         # add seed model & seed trainers to db
         seed_model = orm.SeedModel(split=self.split, round=self.round)
         seed_trainers = [orm.SeedTrainingSpecies(species=s, seed_model=seed_model) for s in trainers]
-        in_split = self.session.query(orm.Species).filter(orm.Species.split == self.split).all()
+        in_split = self.session.query(orm.Species).filter(orm.Species.split == self.split).\
+            filter(orm.Species.is_quality).all()
         if len(seed_trainers) >= len(in_split) - 1:
             print('WARNING: less than 2 validation species remaining. Training of Seed and /or adjustment will fail'
                   'due to lack of validation data. This round cannot be completed.')
@@ -618,7 +610,8 @@ class Configgy:
     def fmt_train_adjust(self):
         config_str = self.config('--resume-training --load-model-path {}'.format(
             self.rh.pm.h5_round_seed(self.rh)))
-        infold_species = self.rh.session.query(orm.Species).filter(orm.Species.split == self.rh.split).all()
+        infold_species = self.rh.session.query(orm.Species).filter(orm.Species.split == self.rh.split).\
+            filter(orm.Species.is_quality).all()
 
         data_dirs = [self.rh.pm.data_round_adj(self.rh)] + [self.rh.pm.data_round_adj_sp(self.rh, sp.name)
                                                             for sp in infold_species]
@@ -627,8 +620,10 @@ class Configgy:
 
     def fmt_evaluations(self):
         config_str = self.config('--eval')
-        xfold_species = self.rh.session.query(orm.Species).filter(orm.Species.split != self.rh.split).all()
-        infold_species = self.rh.session.query(orm.Species).filter(orm.Species.split == self.rh.split).all()
+        xfold_species = self.rh.session.query(orm.Species).filter(orm.Species.split != self.rh.split).\
+            filter(orm.Species.is_quality).all()
+        infold_species = self.rh.session.query(orm.Species).filter(orm.Species.split == self.rh.split).\
+            filter(orm.Species.is_quality).all()
         test_datas = [self.rh.pm.subset_h5(sp.name) for sp in xfold_species]
         load_model_paths = [self.rh.pm.h5_round_adj(self.rh)] + [self.rh.pm.h5_round_adj_sp(self.rh, sp.name)
                                                                  for sp in infold_species]

@@ -1,5 +1,5 @@
 from sqlalchemy.ext.declarative import declarative_base
-from sqlalchemy import Column, Integer, ForeignKey, String, Enum, Float
+from sqlalchemy import Column, Integer, ForeignKey, String, Enum, Float, Boolean
 from sqlalchemy.orm import relationship
 import enum
 
@@ -23,6 +23,7 @@ class Species(Base):
     name = Column(String)
     split = Column(Integer)  #
     phylogenetic_weight = Column(Float)
+    is_quality = Column(Boolean)
     raw_results = relationship('RawResult', back_populates='test_species')
 
 
