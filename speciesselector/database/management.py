@@ -140,7 +140,6 @@ class PathMaker:
         return re.sub(self.adj_str_sp(''), '', adj_str)  # remove "adjustment_" to leave just species
 
     # round / data related
-    @mkdir_neg_p
     def round(self, rnd):
         rtemp, stemp = 'round_{:03}', 'split_{:02}'
         return ospj(rtemp.format(rnd.id), stemp.format(rnd.split))
