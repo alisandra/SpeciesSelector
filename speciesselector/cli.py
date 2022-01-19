@@ -72,7 +72,9 @@ def setup(working_dir, species_full, species_subset, tree, nni_config, exact_mat
 
 @cli.command("next")
 @click.option('--working-dir')
-def ss_next(working_dir):
+@click.option('--tuner-gpu-indices-split0', type=list, default="2,3,4")
+@click.option('--tuner-gpu-indices-split1', type=list, default="5,6,7")
+def ss_next(working_dir, tuner_gpu_indices_split0, tuner_gpu_indices_split1):
     click.echo(f'will setup and run next step for {working_dir}')
     # if latest round status is 2, start training seeds
     engine, session = dbmanagement.mk_session(os.path.join(working_dir, 'spselec.sqlite3'), new_db=False)
