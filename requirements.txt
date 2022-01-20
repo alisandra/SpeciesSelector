@@ -1,5 +1,6 @@
 sqlalchemy
 click
+click-config-file
 numpy
 lxml
 PyQt5

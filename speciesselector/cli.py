@@ -1,6 +1,7 @@
 import json
 
 import click
+import click_config_file
 import os
 from .database import management as dbmanagement
 from .database import orm
@@ -11,6 +12,7 @@ from .helpers import divvy_up_gpu_indices
 
 
 @click.group()
+@click_config_file.configuration_option(config_file_name='config.ini')
 def cli():
     pass
 
@@ -23,7 +25,9 @@ def cli():
 @click.option('--nni-config', required=True)
 @click.option('--exact-match', is_flag=True)
 @click.option('--passed-meta-filter', help='output of spselect metafilter')
-def setup(working_dir, species_full, species_subset, tree, nni_config, exact_match, passed_meta_filter):
+@click.option('--tuner-gpu-indices', type=str, help='gpu indices to constrain nni to (e.g. 0 or 1-3 or 1,2,3')
+def setup(working_dir, species_full, species_subset, tree, nni_config, exact_match, passed_meta_filter,
+          tuner_gpu_indices):
     """prepares sqlitedb, species weighting and splitting, etc for later use"""
     # check naming in species full/subset that everything matches
     list_full = os.listdir(species_full)
@@ -61,9 +65,10 @@ def setup(working_dir, species_full, species_subset, tree, nni_config, exact_mat
     # this is so that the trained models are selected for lower phylogenetic bias than the input data
     # this also splits species into sets (2)
     dbmanagement.add_species_from_tree(tree, list_full, session, exact_match, quality_sp)
+    gpu_indices = divvy_up_gpu_indices(tuner_gpu_indices)
     for split in [0, 1]:
         # ID to split because it needs to make two _different_ rounds at the start (should clean)
-        r = dbmanagement.RoundHandler(session, split=split, id=split)
+        r = dbmanagement.RoundHandler(session, split=split, id=split, gpu_indices=gpu_indices[split])
         # randomly select training seed species for each set
         r.set_first_seeds()
         # initialize and prep first round (seed training, adjustment training, model renaming (more symlinks), eval
@@ -73,8 +78,8 @@ def setup(working_dir, species_full, species_subset, tree, nni_config, exact_mat
 
 
 @cli.command("next")
-@click.option('--working-dir')
-@click.option('--tuner-gpu-indices', type=list, default="2,3,4,5,6,7")
+@click.option('--working-dir', required=True)
+@click.option('--tuner-gpu-indices', type=str, help='gpu indices to constrain nni to (e.g. 0 or 1-3 or 1,2,3')
 def ss_next(working_dir, tuner_gpu_indices):
     click.echo(f'will setup and run next step for {working_dir}')
     # if latest round status is 2, start training seeds

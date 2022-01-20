@@ -87,7 +87,7 @@ class PathMaker:
     eval_str = 'evaluation'
     nni_str = 'nni'
     models_str = 'models'
-    config_yml = 'config.yml'
+    config_yml = 'nni_config.yml'
     search_space_json = 'search_space.json'
 
     def __init__(self, session):
@@ -361,7 +361,7 @@ class RoundHandler:
         start_dir = ospj(self.pm.nni_home, exp_id, 'start')
         os.mkdir(start_dir)
         shutil.copy(ospj(_from, 'search_space.json'), start_dir)
-        shutil.copy(ospj(_from, 'config.yml'), start_dir)
+        shutil.copy(ospj(_from, 'nni_config.yml'), start_dir)
         return exp_id
 
     @property

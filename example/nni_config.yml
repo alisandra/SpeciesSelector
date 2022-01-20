@@ -1,0 +1,12 @@
+experimentName: spselec               # An optional name to distinguish the experiments
+trialCommand: python $hppath/helixer/prediction/HybridModel.py --batch-size 32 --lstm-layers 2 --cnn-layers 2 --units 256 --filter-depth 128 --kernel-size 9 --pool-size 9 --val-test-batch-size 64 --class-weights '"[0.7, 1.6, 1.2, 1.2]"' --transition-weights '"[1, 12, 3, 1, 12, 3]"' --predict-phase --nni --debug
+trialConcurrency: 1
+maxTrialNumber: 1000
+maxExperimentDuration: 1000h
+searchSpaceFile: search_space.json
+trialGpuNumber: 1
+tuner:                              # Configure the tuning algorithm
+   name: GridSearch
+trainingService:                    # Configure the training platform
+   platform: local
+   useActiveGpu: false
