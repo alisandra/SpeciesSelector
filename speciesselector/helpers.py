@@ -96,3 +96,22 @@ def gen_tables(filein):
                     out = []
     if out:
         yield out
+
+
+def divvy_up_gpu_indices(raw_indices):
+    """take command-line indices (printer page style, e.g. 1,45,7-9) and split into two explicit halves 1,7 & 8,9,45"""
+    # returned as a string, to directly fill the gpuIndices NNI parameter
+    if raw_indices is None:
+        return None, None
+    raw_numbers = []
+    items = raw_indices.split(',')
+    for item in items:
+        if item.contains('-'):
+            start, end = [int(x) for x in item.split('-')]
+            raw_numbers += list(range(start, end + 1))
+        else:
+            raw_numbers += [int(x) for x in raw_numbers]
+    raw_numbers = list(set(raw_numbers))
+    assert len(raw_numbers) >= 2
+    halfway = len(raw_numbers) // 2
+    return ','.join(raw_numbers[:halfway]), ','.join(raw_numbers[halfway:])

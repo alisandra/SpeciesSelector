@@ -7,6 +7,8 @@ from .database import orm
 import shutil
 import pandas as pd
 from .filtering.filter import UTRFilter, BuscoFilter, AltSpliceFilter, exemptions_as_sp_names
+from .helpers import divvy_up_gpu_indices
+
 
 @click.group()
 def cli():
@@ -72,15 +74,15 @@ def setup(working_dir, species_full, species_subset, tree, nni_config, exact_mat
 
 @cli.command("next")
 @click.option('--working-dir')
-@click.option('--tuner-gpu-indices-split0', type=list, default="2,3,4")
-@click.option('--tuner-gpu-indices-split1', type=list, default="5,6,7")
-def ss_next(working_dir, tuner_gpu_indices_split0, tuner_gpu_indices_split1):
+@click.option('--tuner-gpu-indices', type=list, default="2,3,4,5,6,7")
+def ss_next(working_dir, tuner_gpu_indices):
     click.echo(f'will setup and run next step for {working_dir}')
     # if latest round status is 2, start training seeds
     engine, session = dbmanagement.mk_session(os.path.join(working_dir, 'spselec.sqlite3'), new_db=False)
+    gpu_indices = divvy_up_gpu_indices(tuner_gpu_indices)
     for split in [0, 1]:
         latest_round_id = max(x.id for x in (session.query(orm.Round).filter(orm.Round.split == split).all()))
-        r = dbmanagement.RoundHandler(session, split, latest_round_id)
+        r = dbmanagement.RoundHandler(session, split, latest_round_id, gpu_indices=gpu_indices[split])
         status = r.round.status.name
         print(f'resuming from status "{status}"')
         # if status was seeds_training, check and record output/nni IDs of above, start fine tuning adjustments
@@ -94,7 +96,7 @@ def ss_next(working_dir, tuner_gpu_indices_split0, tuner_gpu_indices_split1):
         # if status was evaluation, check output of above, record evaluation results, init, prep and start next round
         elif status == "evaluating":
             r.check_and_process_evaluation_results()
-            new_r = dbmanagement.RoundHandler(session, split, latest_round_id + 1)
+            new_r = dbmanagement.RoundHandler(session, split, latest_round_id + 1, gpu_indices=gpu_indices[split])
             new_r.adjust_seeds_since(r)
             new_r.setup_data()
             new_r.setup_control_files()

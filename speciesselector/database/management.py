@@ -245,10 +245,11 @@ def robust_4_me_symlink(src, dest):
 
 
 class RoundHandler:
-    def __init__(self, session, split, id):
+    def __init__(self, session, split, id, gpu_indices):
         self.session = session
         self.split = split
         self.id = id
+        self.gpu_indices = gpu_indices
         self.base_port = 8080  # todo, parameterize to allow user flexible port usage
         self.pm = PathMaker(session)
 
@@ -594,12 +595,15 @@ class Configgy:
         self.config_template = [x.rstrip() for x in self.config_template]
         for i, line in enumerate(self.config_template):
             self.config_template[i] = line.rstrip()
-            if re.match('^ +command:', line):
+            if re.match('^ +command:', line) or re.match('^trialCommand:', line):  # legacy, and 'current' (2022) nni
                 self.config_template[i] = line + ' {}'
         self.rh = round_handler
 
     def config(self, additions=''):
-        return '\n'.join(self.config_template).format(additions)
+        most = '\n'.join(self.config_template).format(additions)
+        if self.rh.gpu_indices is not None:
+            most += '\n  gpuIndices: {}'.format(self.rh.gpu_indices)
+        return most
 
     def fmt_train_seed(self):
         search_space = {'data_dir': {'_type': "choice", "_value": [self.rh.pm.data_round_seed(self.rh)]}}
