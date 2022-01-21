@@ -602,9 +602,19 @@ class Configgy:
         self.rh = round_handler
 
     def config(self, additions=''):
-        most = '\n'.join(self.config_template).format(additions)
+        # todo, replace with a real yml parser/writer
+        # this assumes the file ends with a tuner section
+        # the indentation will also need to match
+        ct = self.config_template.copy()
         if self.rh.gpu_indices is not None:
-            most += '\n  gpuIndices: {}'.format(self.rh.gpu_indices)
+            i = 0
+            old_last_line = ct[-1]
+            while old_last_line[i] == " ":
+                i += 1
+            new_last_line = '{}gpuIndices: {}'.format(' ' * i, self.rh.gpu_indices)
+            ct.append(new_last_line)
+
+        most = '\n'.join(ct).format(additions)
         return most
 
     def fmt_train_seed(self):

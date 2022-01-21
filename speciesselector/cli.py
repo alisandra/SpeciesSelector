@@ -101,7 +101,8 @@ def ss_next(working_dir, tuner_gpu_indices):
         # if status was evaluation, check output of above, record evaluation results, init, prep and start next round
         elif status == "evaluating":
             r.check_and_process_evaluation_results()
-            new_r = dbmanagement.RoundHandler(session, split, latest_round_id + 1, gpu_indices=gpu_indices[split])
+            new_r = dbmanagement.RoundHandler(session, split, latest_round_id + 2,  # because two splits
+                                              gpu_indices=gpu_indices[split])
             new_r.adjust_seeds_since(r)
             new_r.setup_data()
             new_r.setup_control_files()
