@@ -361,7 +361,7 @@ class RoundHandler:
         start_dir = ospj(self.pm.nni_home, exp_id, 'start')
         os.mkdir(start_dir)
         shutil.copy(ospj(_from, 'search_space.json'), start_dir)
-        shutil.copy(ospj(_from, 'nni_config.yml'), start_dir)
+        shutil.copy(ospj(_from, self.pm.config_yml), start_dir)
         return exp_id
 
     @property
