@@ -114,4 +114,8 @@ def divvy_up_gpu_indices(raw_indices):
     raw_numbers = list(set(raw_numbers))
     assert len(raw_numbers) >= 2
     halfway = len(raw_numbers) // 2
-    return ','.join(raw_numbers[:halfway]), ','.join(raw_numbers[halfway:])
+    return int_list_to_str(raw_numbers[:halfway]), int_list_to_str(raw_numbers[halfway:])
+
+
+def int_list_to_str(ints):
+    return ','.join([str(i) for i in ints])
