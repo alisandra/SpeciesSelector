@@ -87,7 +87,7 @@ class PathMaker:
     eval_str = 'evaluation'
     nni_str = 'nni'
     models_str = 'models'
-    config_yml = 'nni_config.yml'
+    config_yml = 'config.yml'
     search_space_json = 'search_space.json'
 
     def __init__(self, session):
