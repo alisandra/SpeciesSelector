@@ -106,7 +106,7 @@ def divvy_up_gpu_indices(raw_indices):
     raw_numbers = []
     items = raw_indices.split(',')
     for item in items:
-        if item.contains('-'):
+        if item.find('-') > -1:
             start, end = [int(x) for x in item.split('-')]
             raw_numbers += list(range(start, end + 1))
         else:
