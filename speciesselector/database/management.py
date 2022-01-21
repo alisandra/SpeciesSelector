@@ -393,7 +393,9 @@ class RoundHandler:
 
     def start_nni(self, status_in, status_out, nni_dir, record_to):
         assert self.round.status.name == status_in, "status mismatch: {} != {}".format(self.round.status, status_in)
-        subprocess.run(['nnictl', 'create', '-c', self.pm.config_yml, '-p', str(self.port)], cwd=nni_dir)
+        sp_args = ['nnictl', 'create', '-c', self.pm.config_yml, '-p', str(self.port)]
+        print('passing to subprocess: {}\nwith cwd: {}'.format(sp_args, nni_dir))
+        subprocess.run(sp_args, cwd=nni_dir)
         # copy control files to nni directory (as usual/for convenience)
         nni_exp_id = self.cp_control_files(_from=nni_dir)
         # I'm sure there is a better way, but for now
