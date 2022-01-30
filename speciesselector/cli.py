@@ -105,8 +105,60 @@ def ss_next(working_dir, tuner_gpu_indices):
                                               gpu_indices=gpu_indices[split])
             new_r.adjust_seeds_since(r)
             new_r.setup_data()
-            new_r.setup_control_files()
-            new_r.start_seed_training()
+            new_r.setup_control_files()  # end with status 'prepped'
+            new_r.start_seed_training()  # end with status 'seeds_training'
+
+
+@cli.command()
+@click.option('--working-dir', required=True)
+@click.option('--tuner-gpu-indices', type=str, help='gpu indices to constrain nni to (e.g. 0 or 1-3 or 1,2,3')
+def pause(working_dir, tuner_gpu_indices):
+    """check and enter results of a run, and prep next without sarting"""
+    click.echo(f'will wrap up current step and prep next for {working_dir}')
+    engine, session = dbmanagement.mk_session(os.path.join(working_dir, 'spselec.sqlite3'), new_db=False)
+    gpu_indices = divvy_up_gpu_indices(tuner_gpu_indices)
+    for split in [0, 1]:
+        latest_round_id = max(x.id for x in (session.query(orm.Round).filter(orm.Round.split == split).all()))
+        r = dbmanagement.RoundHandler(session, split, latest_round_id, gpu_indices=gpu_indices[split])
+        status = r.round.status.name
+        print(f'pausing from status "{status}"')
+        # if status was seeds_training, check and record output/nni IDs of above
+        if status == "seeds_training":
+            r.check_and_link_seed_results()  # status unchanged
+        # if status was adjustment training, check and record output/nni IDs of above
+        elif status == "adjustments_training":
+            r.check_and_link_adj_results()
+        # if status was evaluation, check output of above, record evaluation results, init and prep next round
+        elif status == "evaluating":
+            r.check_and_process_evaluation_results()
+            new_r = dbmanagement.RoundHandler(session, split, latest_round_id + 2,  # because two splits
+                                              gpu_indices=gpu_indices[split])
+            new_r.adjust_seeds_since(r)
+            new_r.setup_data()
+            new_r.setup_control_files()  # end with status 'prepped'
+
+
+@cli.command()
+@click.option('--working-dir', required=True)
+def resume(working_dir):
+    """resume (without any result checking or setup) a paused run"""
+    click.echo(f'will run next step for {working_dir}')
+    # if latest round status is 2, start training seeds
+    engine, session = dbmanagement.mk_session(os.path.join(working_dir, 'spselec.sqlite3'), new_db=False)
+    for split in [0, 1]:
+        latest_round_id = max(x.id for x in (session.query(orm.Round).filter(orm.Round.split == split).all()))
+        r = dbmanagement.RoundHandler(session, split, latest_round_id, gpu_indices=None)
+        status = r.round.status.name
+        print(f'resuming from status "{status}"')
+        # if status was seeds_training, check and record output/nni IDs of above, start fine tuning adjustments
+        if status == "seeds_training":
+            r.start_adj_training()
+        # if status was adjustment training, check and record output/nni IDs of above, start evaluation
+        elif status == "adjustments_training":
+            r.start_adj_evaluation()
+        # if status was prepped, start next round
+        elif status == "prepped":
+            r.start_seed_training()
 
 
 @cli.command()
