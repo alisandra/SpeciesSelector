@@ -318,8 +318,8 @@ class RoundHandler:
         for sp in seed_sp_t:
             # for seed train
             robust_4_me_symlink(self.pm.full_h5(sp.name), dest(seed_dir, sp.name))
-            # for fine-tuning w/o changing species, but w/ subset etc to match other adjustments
-            robust_4_me_symlink(self.pm.subset_h5(sp.name), dest(adj_dir, sp.name))
+            # for fine-tuning w/o changing species, but otherwise to match other adjustments
+            robust_4_me_symlink(self.pm.full_h5(sp.name), dest(adj_dir, sp.name))
         for sp in seed_sp_v:
             robust_4_me_symlink(self.pm.subset_h5(sp.name), dest(seed_dir, sp.name, is_train=False))
             robust_4_me_symlink(self.pm.subset_h5(sp.name), dest(adj_dir, sp.name, is_train=False))
@@ -328,7 +328,7 @@ class RoundHandler:
         for adj_sp in seed_sp_v:
             adj_sp_dir = self.pm.data_round_adj_sp(self, adj_sp.name)
             for sp in seed_sp_t + [adj_sp]:  # same trainers as seed + adjustment species
-                robust_4_me_symlink(self.pm.subset_h5(sp.name), dest(adj_sp_dir, sp.name))
+                robust_4_me_symlink(self.pm.full_h5(sp.name), dest(adj_sp_dir, sp.name))
             for sp in seed_sp_v:
                 if not sp == adj_sp:  # same validators as seed - adjustment species
                     robust_4_me_symlink(self.pm.subset_h5(sp.name), dest(adj_sp_dir, sp.name, is_train=False))
@@ -337,7 +337,7 @@ class RoundHandler:
             adj_sp_dir = self.pm.data_round_adj_sp(self, adj_sp.name)
             for sp in seed_sp_t:
                 if not sp == adj_sp:  # - adjustment species from train
-                    robust_4_me_symlink(self.pm.subset_h5(sp.name), dest(adj_sp_dir, sp.name))
+                    robust_4_me_symlink(self.pm.full_h5(sp.name), dest(adj_sp_dir, sp.name))
             for sp in seed_sp_v + [adj_sp]:  # + adjustment species to val
                 robust_4_me_symlink(self.pm.subset_h5(sp.name), dest(adj_sp_dir, sp.name, is_train=False))
 
