@@ -80,7 +80,9 @@ def setup(working_dir, species_full, species_subset, tree, nni_config, exact_mat
 @cli.command("next")
 @click.option('--working-dir', required=True)
 @click.option('--tuner-gpu-indices', type=str, help='gpu indices to constrain nni to (e.g. 0 or 1-3 or 1,2,3')
-def ss_next(working_dir, tuner_gpu_indices):
+@click.option('--maximum-changes', type=int, default=6, help='the N largest improvements will be performed '
+                                                             '(unless < N improvements are available)')
+def ss_next(working_dir, tuner_gpu_indices, maximum_changes):
     click.echo(f'will setup and run next step for {working_dir}')
     # if latest round status is 2, start training seeds
     engine, session = dbmanagement.mk_session(os.path.join(working_dir, 'spselec.sqlite3'), new_db=False)
@@ -103,7 +105,7 @@ def ss_next(working_dir, tuner_gpu_indices):
             r.check_and_process_evaluation_results()
             new_r = dbmanagement.RoundHandler(session, split, latest_round_id + 2,  # because two splits
                                               gpu_indices=gpu_indices[split])
-            new_r.adjust_seeds_since(r)
+            new_r.adjust_seeds_since(r, maximum_changes=maximum_changes)
             new_r.setup_data()
             new_r.setup_control_files()  # end with status 'prepped'
             new_r.start_seed_training()  # end with status 'seeds_training'
@@ -112,7 +114,9 @@ def ss_next(working_dir, tuner_gpu_indices):
 @cli.command()
 @click.option('--working-dir', required=True)
 @click.option('--tuner-gpu-indices', type=str, help='gpu indices to constrain nni to (e.g. 0 or 1-3 or 1,2,3')
-def pause(working_dir, tuner_gpu_indices):
+@click.option('--maximum-changes', type=int, default=6, help='the N largest improvements will be performed '
+                                                             '(unless < N improvements are available)')
+def pause(working_dir, tuner_gpu_indices, maximum_changes):
     """check and enter results of a run, and prep next without sarting"""
     click.echo(f'will wrap up current step and prep next for {working_dir}')
     engine, session = dbmanagement.mk_session(os.path.join(working_dir, 'spselec.sqlite3'), new_db=False)
@@ -133,7 +137,7 @@ def pause(working_dir, tuner_gpu_indices):
             r.check_and_process_evaluation_results()
             new_r = dbmanagement.RoundHandler(session, split, latest_round_id + 2,  # because two splits
                                               gpu_indices=gpu_indices[split])
-            new_r.adjust_seeds_since(r)
+            new_r.adjust_seeds_since(r, maximum_changes=maximum_changes)
             new_r.setup_data()
             new_r.setup_control_files()  # end with status 'prepped'
 

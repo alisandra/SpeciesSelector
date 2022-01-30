@@ -564,19 +564,24 @@ class RoundHandler:
         weighted_res = sum([f1 * w for f1, w in zip(weights, f1s)]) / sum(weights)
         return weighted_res
 
-    def adjust_seeds_since(self, prev_round):
+    def adjust_seeds_since(self, prev_round, maximum_changes):
         prev_models = prev_round.round.adjustment_models
         trainers = [x for x in prev_round.seed_training_species]
         # sort descending genic f1
         sorted_prev = sorted(prev_models, key=lambda x: - x.weighted_test_genic_f1)
+        n_changed = 0
         for adj_model in sorted_prev:
             # consider only improvements, so quit once the un-changed model has been found
             if adj_model.delta_n_species == 0:
+                break
+            # also quit if we've already reached maximum changes
+            elif n_changed >= maximum_changes:
                 break
             elif adj_model.delta_n_species == 1:
                 trainers.append(adj_model.species)
             elif adj_model.delta_n_species == -1:
                 trainers = [x for x in trainers if x != adj_model.species]
+            n_changed += 1
         # add seed model & seed trainers to db
         seed_model = orm.SeedModel(split=self.split, round=self.round)
         seed_trainers = [orm.SeedTrainingSpecies(species=s, seed_model=seed_model) for s in trainers]
