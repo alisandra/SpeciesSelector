@@ -95,18 +95,22 @@ def ss_next(working_dir, tuner_gpu_indices, maximum_changes):
         # if status was seeds_training, check and record output/nni IDs of above, start fine tuning adjustments
         if status == "seeds_training":
             r.check_and_link_seed_results()
+            r.start_seed_evaluation()
+        elif status == "seeds_evaluating":
+            r.check_and_process_evaluation_results(is_fine_tune=False)
+            r.setup_adjustment_data()
             r.start_adj_training()
         # if status was adjustment training, check and record output/nni IDs of above, start evaluation
         elif status == "adjustments_training":
             r.check_and_link_adj_results()
             r.start_adj_evaluation()
         # if status was evaluation, check output of above, record evaluation results, init, prep and start next round
-        elif status == "evaluating":
-            r.check_and_process_evaluation_results()
+        elif status == "seeds_evaluating":
+            r.check_and_process_evaluation_results(is_fine_tune=True)
             new_r = dbmanagement.RoundHandler(session, split, latest_round_id + 2,  # because two splits
                                               gpu_indices=gpu_indices[split])
             new_r.adjust_seeds_since(r, maximum_changes=maximum_changes)
-            new_r.setup_data()
+            new_r.setup_seed_data()
             new_r.setup_control_files()  # end with status 'prepped'
             new_r.start_seed_training()  # end with status 'seeds_training'
 
@@ -133,8 +137,8 @@ def pause(working_dir, tuner_gpu_indices, maximum_changes):
         elif status == "adjustments_training":
             r.check_and_link_adj_results()
         # if status was evaluation, check output of above, record evaluation results, init and prep next round
-        elif status == "evaluating":
-            r.check_and_process_evaluation_results()
+        elif status == "seeds_evaluating":
+            r.check_and_process_evaluation_results(is_fine_tune=True)
             new_r = dbmanagement.RoundHandler(session, split, latest_round_id + 2,  # because two splits
                                               gpu_indices=gpu_indices[split])
             new_r.adjust_seeds_since(r, maximum_changes=maximum_changes)

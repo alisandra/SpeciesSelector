@@ -4,7 +4,7 @@ import subprocess
 import time
 
 from . import orm
-from sqlalchemy import create_engine
+from sqlalchemy import create_engine, not_
 from sqlalchemy.orm import sessionmaker
 from ete3 import Tree
 from speciesselector.helpers import match_tree_names_plants, match_tree_names_exact, parse_eval_log, F1Decode
@@ -139,6 +139,15 @@ class PathMaker:
     def sp_from_adj_str(self, adj_str):
         return re.sub(self.adj_str_sp(''), '', adj_str)  # remove "adjustment_" to leave just species
 
+    @staticmethod
+    def seed_model_str(seed_model):
+        return f'seed_{seed_model.id:03}'
+
+    @staticmethod
+    def sm_id_from_sm_str(sm_str):
+        id_str = re.sub('seed_', '', sm_str)
+        return int(id_str)
+
     # round / data related
     def round(self, rnd):
         rtemp, stemp = 'round_{:03}', 'split_{:02}'
@@ -154,8 +163,8 @@ class PathMaker:
         return ospj(self.data, self.round(rnd))
 
     @mkdir_neg_p
-    def data_round_seed(self, rnd):
-        return ospj(self.data_round(rnd), self.seed_str)
+    def data_round_seed(self, rnd, seed_model):
+        return ospj(self.data_round(rnd), self.seed_model_str(seed_model))
 
     @mkdir_neg_p
     def data_round_adj(self, rnd):
@@ -178,6 +187,11 @@ class PathMaker:
 
     @property
     @mkdir_neg_p
+    def nni_evaluation_seed(self):
+        return ospj(self.nni, self.eval_str, self.seed_str)
+
+    @property
+    @mkdir_neg_p
     def nni_training_adj(self):
         return ospj(self.nni, self.training_str, self.adj_str)
 
@@ -189,6 +203,10 @@ class PathMaker:
     @mkdir_neg_p
     def nni_training_seed_round(self, rnd):
         return ospj(self.nni_training_seed, self.round(rnd))
+
+    @mkdir_neg_p
+    def nni_evaluation_seed_round(self, rnd):
+        return ospj(self.nni_evaluation_seed, self.round(rnd))
 
     @mkdir_neg_p
     def nni_training_adj_round(self, rnd):
@@ -209,8 +227,8 @@ class PathMaker:
         return ospj(self.models, self.round(rnd))
 
     @mkdir_neg_p
-    def models_round_seed(self, rnd):
-        return ospj(self.models_round(rnd), self.seed_str)
+    def models_round_seed(self, rnd, seed_model):
+        return ospj(self.models_round(rnd), self.seed_model_str(seed_model))
 
     def h5_round_seed(self, rnd, model='best_model.h5'):
         return ospj(self.models_round_seed(rnd), model)
@@ -232,6 +250,15 @@ class PathMaker:
     def h5_round_custom(self, rnd, custom, model='best_model.h5'):
         return ospj(self.models_round(rnd), custom, model)
 
+    @staticmethod
+    def h5_dest(dest_dir, species_name, is_train=True):
+        """final path to symlink train/val h5 files to"""
+        if is_train:
+            h5 = f'training_data.{species_name}.h5'
+        else:
+            h5 = f'validation_data.{species_name}.h5'
+        return ospj(dest_dir, h5)
+
 
 def robust_4_me_symlink(src, dest):
     # overwrite a destination symlink (and only symlink)
@@ -245,13 +272,14 @@ def robust_4_me_symlink(src, dest):
 
 
 class RoundHandler:
-    def __init__(self, session, split, id, gpu_indices):
+    def __init__(self, session, split, id, gpu_indices, n_seeds):
         self.session = session
         self.split = split
         self.id = id
         self.gpu_indices = gpu_indices
         self.base_port = 8080  # todo, parameterize to allow user flexible port usage
         self.pm = PathMaker(session)
+        self.n_seeds = n_seeds
 
         # check for existing round
         rounds = session.query(orm.Round).filter(orm.Round.id == id).all()
@@ -264,82 +292,95 @@ class RoundHandler:
         else:
             raise ValueError(f"{len(rounds)} rounds found with id {id}???")
 
-    def set_first_seeds(self, max_n_seeds=8):
+    def set_first_seeds(self, max_seed_training_sp=8):
         # get all species in set
         set_sp = self.session.query(orm.Species).filter(orm.Species.split == self.split).\
             filter(orm.Species.is_quality).all()
-        max_n_seeds = min(max_n_seeds, len(set_sp) // 2)  # leave at least half for validation
+        max_seed_training_sp = min(max_seed_training_sp, len(set_sp) // 2)  # leave at least half for validation
         # select trainers
-        random.shuffle(set_sp)
-        trainers = set_sp[:max_n_seeds]
-        # setup seed model & seed trainers
-        seed_model = orm.SeedModel(split=self.split, round=self.round)
-        seed_trainers = [orm.SeedTrainingSpecies(species=s, seed_model=seed_model) for s in trainers]
-        self.session.add(seed_model)
-        self.session.add_all(seed_trainers)
+        for _ in range(self.n_seeds):
+            random.shuffle(set_sp)
+            trainers = set_sp[:max_seed_training_sp]
+            # setup seed models & seed trainers
+            seed_model = orm.SeedModel(split=self.split, round=self.round)
+            seed_trainers = [orm.SeedTrainingSpecies(species=s, seed_model=seed_model) for s in trainers]
+            self.session.add(seed_model)
+            self.session.add_all(seed_trainers)
         self.session.commit()
 
     @property
-    def seed_model(self):
-        seed_model = self.session.query(orm.SeedModel).filter(orm.SeedModel.round_id == self.id).\
-            filter(orm.SeedModel.split == self.split).all()
-        assert len(seed_model) == 1, f"{len(seed_model)} != 1, seed models found?..."
-        return seed_model[0]
+    def seed_models(self):
+        seed_models = self.session.query(orm.SeedModel).filter(orm.SeedModel.round_id == self.id).\
+            filter(orm.SeedModel.split == self.split).order_by(orm.SeedModel.id).all()
+        return seed_models
 
-    @property
-    def seed_training_species(self):
-        return [ssp.species for ssp in self.seed_model.seed_training_species]
+    @staticmethod
+    def seed_model_training_species(seed_model):
+        return [ssp.species for ssp in seed_model.seed_training_species]
 
-    @property
-    def seed_validation_species(self):
+    def seed_model_validation_species(self, seed_model):
         split_sp = self.session.query(orm.Species).filter(orm.Species.split == self.split).\
             filter(orm.Species.is_quality).all()
-        return [sp for sp in split_sp if sp not in self.seed_training_species]
+        seed_training_species = self.seed_model_training_species(seed_model)
+        return [sp for sp in split_sp if sp not in seed_training_species]
 
-    def setup_data(self):
-        # seed trainers
-        seed_sp_t = self.seed_training_species
-        # seed validation AND adjustment species that will be added 1 by 1 to trainers
-        seed_sp_v = self.seed_validation_species
+    def best_seed_model(self):
+        # todo, fix to return the one that had the best evaluation!!!
+        return self.seed_models[0]
 
-        # setup seed data
-        # seed training prep with 'full' h5 files
-        seed_dir = self.pm.data_round_seed(self)
+    def setup_adjustment_data(self):
+        """setup adjustment data for fine-tuning the adjustment model that performed the best"""
+        seed_model = self.best_seed_model()
         adj_dir = self.pm.data_round_adj(self)
 
-        def dest(dest_dir, species_name, is_train=True):
-            """final path to symlink train/val h5 files to"""
-            if is_train:
-                h5 = f'training_data.{species_name}.h5'
-            else:
-                h5 = f'validation_data.{species_name}.h5'
-            return ospj(dest_dir, h5)
+        # seed trainers
+        seed_sp_t = self.seed_model_training_species(seed_model)
+        # seed validation AND adjustment species that will be added 1 by 1 to trainers
+        seed_sp_v = self.seed_model_validation_species(seed_model)
 
         for sp in seed_sp_t:
-            # for seed train
-            robust_4_me_symlink(self.pm.full_h5(sp.name), dest(seed_dir, sp.name))
             # for fine-tuning w/o changing species, but otherwise to match other adjustments
-            robust_4_me_symlink(self.pm.full_h5(sp.name), dest(adj_dir, sp.name))
+            robust_4_me_symlink(self.pm.full_h5(sp.name), self.pm.h5_dest(adj_dir, sp.name))
         for sp in seed_sp_v:
-            robust_4_me_symlink(self.pm.subset_h5(sp.name), dest(seed_dir, sp.name, is_train=False))
-            robust_4_me_symlink(self.pm.subset_h5(sp.name), dest(adj_dir, sp.name, is_train=False))
+            robust_4_me_symlink(self.pm.subset_h5(sp.name), self.pm.h5_dest(adj_dir, sp.name, is_train=False))
+
         # setup adjusted data
         # one by one addition of validation species to train
         for adj_sp in seed_sp_v:
             adj_sp_dir = self.pm.data_round_adj_sp(self, adj_sp.name)
             for sp in seed_sp_t + [adj_sp]:  # same trainers as seed + adjustment species
-                robust_4_me_symlink(self.pm.full_h5(sp.name), dest(adj_sp_dir, sp.name))
+                robust_4_me_symlink(self.pm.full_h5(sp.name), self.pm.h5_dest(adj_sp_dir, sp.name))
             for sp in seed_sp_v:
                 if not sp == adj_sp:  # same validators as seed - adjustment species
-                    robust_4_me_symlink(self.pm.subset_h5(sp.name), dest(adj_sp_dir, sp.name, is_train=False))
+                    robust_4_me_symlink(self.pm.subset_h5(sp.name), self.pm.h5_dest(adj_sp_dir, sp.name, is_train=False))
         # one by one drop of training species from train
         for adj_sp in seed_sp_t:
             adj_sp_dir = self.pm.data_round_adj_sp(self, adj_sp.name)
             for sp in seed_sp_t:
                 if not sp == adj_sp:  # - adjustment species from train
-                    robust_4_me_symlink(self.pm.full_h5(sp.name), dest(adj_sp_dir, sp.name))
+                    robust_4_me_symlink(self.pm.full_h5(sp.name), self.pm.h5_dest(adj_sp_dir, sp.name))
             for sp in seed_sp_v + [adj_sp]:  # + adjustment species to val
-                robust_4_me_symlink(self.pm.subset_h5(sp.name), dest(adj_sp_dir, sp.name, is_train=False))
+                robust_4_me_symlink(self.pm.subset_h5(sp.name), self.pm.h5_dest(adj_sp_dir, sp.name, is_train=False))
+
+    def setup_seed_data(self):
+        """setup the seed training data"""
+        for seed_model in self.seed_models:
+            # seed trainers
+            seed_sp_t = self.seed_model_training_species(seed_model)
+            # seed validation AND adjustment species that will be added 1 by 1 to trainers
+            seed_sp_v = self.seed_model_validation_species(seed_model)
+
+            # setup seed data
+            # seed training prep with 'full' h5 files
+            seed_dir = self.pm.data_round_seed(self, seed_model)
+
+            for sp in seed_sp_t:
+                # for seed train
+                robust_4_me_symlink(self.pm.full_h5(sp.name), self.pm.h5_dest(seed_dir, sp.name))
+
+            for sp in seed_sp_v:
+                robust_4_me_symlink(self.pm.subset_h5(sp.name), self.pm.h5_dest(seed_dir, sp.name, is_train=False))
+
 
     def setup_control_files(self):
         # train seed
@@ -401,10 +442,12 @@ class RoundHandler:
         # I'm sure there is a better way, but for now
         if record_to == 'nni_seeds_id':
             self.round.nni_seeds_id = nni_exp_id
-        elif record_to == 'nni_adjustment_id':
-            self.round.nni_adjustment_id = nni_exp_id
-        elif record_to == 'nni_eval_id':
-            self.round.nni_eval_id = nni_exp_id
+        elif record_to == "nni_seeds_eval_id":
+            self.round.nni_seeds_eval_id = nni_exp_id
+        elif record_to == 'nni_adjustments_id':
+            self.round.nni_adjustments_id = nni_exp_id
+        elif record_to == 'nni_adjustments_eval_id':
+            self.round.nni_adjustments_eval_id = nni_exp_id
         else:
             raise ValueError(f'unexpected/unhandled string value: {record_to} for "record_to"')
         # record nni_id in db
@@ -435,11 +478,17 @@ class RoundHandler:
         robust_4_me_symlink(ospj(trial_base, trial, 'best_model.h5'), self.pm.h5_round_seed(self))
         self.stop_nni()
 
-    def start_adj_training(self):
+    def start_seed_evaluation(self):
         self.start_nni(status_in="seeds_training",
+                       status_out="seeds_evaluating",
+                       nni_dir=self.pm.nni_evaluation_seed_round(self),
+                       record_to='nni_seeds_eval_id')
+
+    def start_adj_training(self):
+        self.start_nni(status_in="seeds_evaluating",
                        status_out="adjustments_training",
                        nni_dir=self.pm.nni_training_adj_round(self),
-                       record_to='nni_adjustment_id')
+                       record_to='nni_adjustments_id')
 
     def check_and_link_adj_results(self):
         assert self.round.status.name == "adjustments_training"
@@ -451,7 +500,6 @@ class RoundHandler:
         # link best model
         to_add = []
         for trial in trials:
-            # todo mv path to pm, maybe most of this loop actually
             with open(ospj(trial_base, trial, 'parameter.cfg')) as f:
                 pars = json.load(f)
             data_dir = pars['parameters']['data_dir']
@@ -460,13 +508,13 @@ class RoundHandler:
             # also create a db entry for the AdjustmentModel
             sp_id, delta_n_species = self.sp_id_and_delta_from_adj_str(full_adj_str)
             # check if we've already recorded this (e.g. bc we're restarting failed run)
-            existing_matches = self.session.query(orm.AdjustmentModel).\
-                filter(orm.AdjustmentModel.round_id == self.id).\
-                filter(orm.AdjustmentModel.species_id == sp_id).all()
-            print(existing_matches, '<- existing matches')
+            existing_matches = self.session.query(orm.EvaluationModel).\
+                filter(orm.EvaluationModel.round_id == self.id).\
+                filter(orm.EvaluationModel.species_id == sp_id).\
+                filter(orm.EvaluationModel.is_fine_tuned).all()
             if not existing_matches:
-                adj_model = orm.AdjustmentModel(round=self.round, species_id=sp_id,
-                                                delta_n_species=delta_n_species, seed_model=self.seed_model)
+                adj_model = orm.EvaluationModel(round=self.round, species_id=sp_id,
+                                                delta_n_species=delta_n_species, seed_model=self.best_seed_model())
                 to_add.append(adj_model)
         self.session.add_all(to_add)
         self.session.commit()
@@ -481,7 +529,7 @@ class RoundHandler:
             sp_name = self.pm.sp_from_adj_str(adj_str)
             species = self.sp_by_name(sp_name)
             species_id = species.id
-            if species in self.seed_training_species:
+            if species in self.seed_model_training_species(self.best_seed_model()):
                 delta_n_species = -1
             else:
                 delta_n_species = 1
@@ -494,65 +542,91 @@ class RoundHandler:
         else:
             raise ValueError(f"Number of species: {sp} found matching '{sp_name}' is not 1!")
 
+    def seed_model_from_sm_str(self, sm_str):
+        sm_id = self.pm.sm_id_from_sm_str(sm_str)
+        seed_model = self.session.query(orm.SeedModel).filter(orm.SeedModel.id == sm_id).first()
+        return seed_model
+
     def start_adj_evaluation(self):
         self.start_nni(status_in="adjustments_training",
-                       status_out="evaluating",
+                       status_out="adjustments_evaluating",
                        nni_dir=self.pm.nni_evaluation_adj_round(self),
-                       record_to='nni_eval_id')
+                       record_to='nni_adjustments_eval_id')
 
-    def check_and_process_evaluation_results(self):
-        assert self.round.status.name == "evaluating"
+    def check_and_process_evaluation_results(self, is_fine_tune):
+        """from evaluation nni log files to db record there of"""
+        if is_fine_tune:
+            assert self.round.status.name == "adjustments_evaluating"
+        else:
+            assert self.round.status.name == "seeds_evaluating"
+
         # get trial dir
         trial_base = ospj(self.pm.nni_home, self.round.nni_eval_id, 'trials')
         trials = os.listdir(trial_base)
         assert len(trials) > 1, "expected multiple adjustment trials but found only {} for round{}/split{}".format(
             len(trials), self.id, self.split)
         # link best model
-        to_add = []
         for trial in trials:
-            # todo mv path to pm, maybe most of this loop actually
-            with open(ospj(trial_base, trial, 'parameter.cfg')) as f:
-                pars = json.load(f)
-            test_data = pars['parameters']['test_data']
-            test_sp = self.sp_by_name(test_data.split('/')[-2])
-            load_model_path = pars['parameters']['load_model_path']
-            full_adj_str = load_model_path.split('/')[-2]  # -1 is best_model.h5, -2 is adj species
-            # record data/adj combo
             results = parse_eval_log(ospj(trial_base, trial, 'trial.log'))
-            sp_id, delta_n_species = self.sp_id_and_delta_from_adj_str(full_adj_str)
-            adjustment_model = self.session.query(orm.AdjustmentModel).\
-                filter(orm.AdjustmentModel.species_id == sp_id).\
-                filter(orm.AdjustmentModel.round_id == self.id).all()
-            assert len(adjustment_model) == 1, f"{len(adjustment_model)} adjustment model found for {sp_id} in round {self.id}"
-            adjustment_model = adjustment_model[0]
-            print(results)
-            # check if we've already recorded this (e.g. bc we're restarting failed run
-            existing_matches = self.session.query(orm.RawResult).\
-                filter(orm.RawResult.adjustment_model_id == adjustment_model.id).\
-                filter(orm.RawResult.test_species_id == test_sp.id).all()
-            if not existing_matches:
-                raw_result = orm.RawResult(adjustment_model=adjustment_model,
-                                           test_species=test_sp,
-                                           genic_f1=results[F1Decode.GENIC],
-                                           intergenic_f1=results[F1Decode.IG],
-                                           utr_f1=results[F1Decode.UTR],
-                                           cds_f1=results[F1Decode.CDS],
-                                           intron_f1=results[F1Decode.INTRON])
-                to_add.append(raw_result)
-        self.session.add_all(to_add)
+            test_sp, full_train_data_str = self.train_info_from_json(trial_base, trial)
+            # record data/adj combo
+            if is_fine_tune:
+                # i.e. this is an adjustment model, named by species
+                sp_id, delta_n_species = self.sp_id_and_delta_from_adj_str(full_train_data_str)
+                eval_model = self.session.query(orm.EvaluationModel).\
+                    filter(orm.EvaluationModel.species_id == sp_id).\
+                    filter(orm.EvaluationModel.round_id == self.id).\
+                    filter(orm.EvaluationModel.is_fine_tuned).all()
+                assert len(eval_model) == 1, f"{len(eval_model)} (!= 1) adjustment models found for species: {sp_id} in round {self.id}"
+                eval_model = eval_model[0]
+            else:
+                # i.e. this is a seed model, named by seed_model id
+                seed_model = self.seed_model_from_sm_str(full_train_data_str)
+                eval_model = self.session.query(orm.EvaluationModel).\
+                    filter(orm.EvaluationModel.seed_model_id == seed_model.id).\
+                    filter(orm.EvaluationModel.round_id == self.id).\
+                    filter(not_(orm.EvaluationModel.is_fine_tuned)).all()
+                assert len(eval_model) == 1, f"{len(eval_model)} (!= 1) seed models found for seed model: {seed_model} in round {self.id}"
+                eval_model = eval_model[0]
+            self.add_result2db(results, test_sp, eval_model)
         self.session.commit()
         # aggregate eval data for the round
         to_add = []
-        for adjustment_model in self.round.adjustment_models:
-            raw_results = adjustment_model.raw_results
-            print(adjustment_model)
-            for f1_str in ["genic_f1", "intergenic_f1", "utr_f1", "cds_f1", "intron_f1"]:
-                weighted = self.aggregate_res(f1_str, raw_results)
-                adjustment_model.set_attr_by_name(f"weighted_test_{f1_str}", weighted)
-            to_add.append(adjustment_model)
+        for eval_model in self.round.evaluation_models:
+            # skip seeds (is_fine_tune = False) when running for adjustments
+            if eval_model.is_fine_tune == is_fine_tune:
+                raw_results = eval_model.raw_results
+                for f1_str in ["genic_f1", "intergenic_f1", "utr_f1", "cds_f1", "intron_f1"]:
+                    weighted = self.aggregate_res(f1_str, raw_results)
+                    eval_model.set_attr_by_name(f"weighted_test_{f1_str}", weighted)
+                to_add.append(eval_model)
         self.session.add_all(to_add)
         self.session.commit()
         self.stop_nni()
+
+    def train_info_from_json(self, trial_base, trial):
+        with open(ospj(trial_base, trial, 'parameter.cfg')) as f:
+            pars = json.load(f)
+        test_data = pars['parameters']['test_data']
+        test_sp = self.sp_by_name(test_data.split('/')[-2])
+        load_model_path = pars['parameters']['load_model_path']
+        train_dir = load_model_path.split('/')[-2]  # -1 is best_model.h5, -2 is adj species
+        return test_sp, train_dir
+
+    def add_result2db(self, results, test_sp, evaluation_model):
+        # check if we've already recorded this (e.g. bc we're restarting failed run
+        existing_matches = self.session.query(orm.RawResult). \
+            filter(orm.RawResult.evaluation_model_id == evaluation_model.id). \
+            filter(orm.RawResult.test_species_id == test_sp.id).all()
+        if not existing_matches:
+            raw_result = orm.RawResult(evaluation_model=evaluation_model,
+                                       test_species=test_sp,
+                                       genic_f1=results[F1Decode.GENIC],
+                                       intergenic_f1=results[F1Decode.IG],
+                                       utr_f1=results[F1Decode.UTR],
+                                       cds_f1=results[F1Decode.CDS],
+                                       intron_f1=results[F1Decode.INTRON])
+            self.session.add(raw_result)
 
     @staticmethod
     def aggregate_res(f1_str, results):
@@ -565,7 +639,7 @@ class RoundHandler:
         return weighted_res
 
     def adjust_seeds_since(self, prev_round, maximum_changes):
-        prev_models = prev_round.round.adjustment_models
+        prev_models = prev_round.round.evaluation_models
         trainers = [x for x in prev_round.seed_training_species]
         # sort descending genic f1
         sorted_prev = sorted(prev_models, key=lambda x: - x.weighted_test_genic_f1)
