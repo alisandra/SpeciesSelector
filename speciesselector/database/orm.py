@@ -28,12 +28,13 @@ class Species(Base):
 
 
 class RoundStatus(enum.Enum):
-    initialized = 1  # round has been instantiated
-    prepped = 2  # all symlinks and control files have been created
-    seeds_training = 3
-    seeds_evaluating = 3
-    adjustments_training = 4
-    adjustments_evaluating = 5
+    initialized = "initialized"  # round has been instantiated
+    seeds_prepped = "seeds_prepped"  # seed symlinks and control files have been created
+    seeds_training = "seeds_training"  # nni started for seeds training
+    seeds_evaluating = "seeds_evaluating"  # nni started for seeds evaluation
+    adjustments_prepped = "adjustments_prepped"  # adj symlinks and control files created
+    adjustments_training = "adjustments_training"  # nni started for adj training
+    adjustments_evaluating = "adjustments_evaluating"  # nni started for adj evaluation
 
 
 class Round(Base):

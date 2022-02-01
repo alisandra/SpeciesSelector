@@ -230,8 +230,8 @@ class PathMaker:
     def models_round_seed(self, rnd, seed_model):
         return ospj(self.models_round(rnd), self.seed_model_str(seed_model))
 
-    def h5_round_seed(self, rnd, model='best_model.h5'):
-        return ospj(self.models_round_seed(rnd), model)
+    def h5_round_seed(self, rnd, seed_model, model='best_model.h5'):
+        return ospj(self.models_round_seed(rnd, seed_model), model)
 
     @mkdir_neg_p
     def models_round_adj(self, rnd):
@@ -292,13 +292,13 @@ class RoundHandler:
         else:
             raise ValueError(f"{len(rounds)} rounds found with id {id}???")
 
-    def set_first_seeds(self, max_seed_training_sp=8):
+    def set_random_seeds(self, max_seed_training_sp=8, n_already_set=0):
         # get all species in set
         set_sp = self.session.query(orm.Species).filter(orm.Species.split == self.split).\
             filter(orm.Species.is_quality).all()
         max_seed_training_sp = min(max_seed_training_sp, len(set_sp) // 2)  # leave at least half for validation
         # select trainers
-        for _ in range(self.n_seeds):
+        for _ in range(self.n_seeds - n_already_set):
             random.shuffle(set_sp)
             trainers = set_sp[:max_seed_training_sp]
             # setup seed models & seed trainers
@@ -325,8 +325,12 @@ class RoundHandler:
         return [sp for sp in split_sp if sp not in seed_training_species]
 
     def best_seed_model(self):
-        # todo, fix to return the one that had the best evaluation!!!
-        return self.seed_models[0]
+        seed_eval_models = [em for em in self.round.evaluation_models if not em.is_fine_tuned]
+        # confirm these have been evaluated
+        assert seed_eval_models[0].weighted_test_genic_f1 is not None
+        # sort descending genic f1
+        seed_eval_models = sorted(seed_eval_models, key=lambda x: - x.weighted_test_genic_f1)
+        return seed_eval_models[0].seed_model  # seed model that had the best x-fold evaluation
 
     def setup_adjustment_data(self):
         """setup adjustment data for fine-tuning the adjustment model that performed the best"""
@@ -382,18 +386,27 @@ class RoundHandler:
                 robust_4_me_symlink(self.pm.subset_h5(sp.name), self.pm.h5_dest(seed_dir, sp.name, is_train=False))
 
 
-    def setup_control_files(self):
-        # train seed
+    def setup_seed_control_files(self):
         configgy = Configgy(self.pm.config_template, self)
+        # train seed
         cfg_ssj = configgy.fmt_train_seed()
         configgy.write_to(cfg_ssj, self.pm.nni_training_seed_round(self))
+        # eval seed
+        configgy.fmt_seed_evaluations()
+        configgy.write_to(cfg_ssj, self.pm.nni_evaluation_seed_round(self))
+        self.round.status = orm.RoundStatus.seeds_prepped.name
+        self.session.add(self.round)
+        self.session.commit()
+
+    def setup_adj_control_files(self):
+        configgy = Configgy(self.pm.config_template, self)
         # train adjustments
-        cfg_ssj = configgy.fmt_train_adjust()
+        cfg_ssj = configgy.fmt_train_adjust()  # calls to rh.best_seed_model, i.e. requires train eval to be complete
         configgy.write_to(cfg_ssj, self.pm.nni_training_adj_round(self))
         # evaluation adjustments
-        cfg_ssj = configgy.fmt_evaluations()
+        cfg_ssj = configgy.fmt_adj_evaluations()
         configgy.write_to(cfg_ssj, self.pm.nni_evaluation_adj_round(self))
-        self.round.status = "prepped"
+        self.round.status = orm.RoundStatus.adjustments_prepped.name
         self.session.add(self.round)
         self.session.commit()
 
@@ -461,37 +474,48 @@ class RoundHandler:
         time.sleep(5)  # temp patch, bc idk how to get `wait` from here...
 
     def start_seed_training(self):
-        self.start_nni(status_in="prepped",
-                       status_out="seeds_training",
+        self.start_nni(status_in=orm.RoundStatus.seeds_prepped.name,
+                       status_out=orm.RoundStatus.seeds_training.name,
                        nni_dir=self.pm.nni_training_seed_round(self),
                        record_to='nni_seeds_id')
 
     def check_and_link_seed_results(self):
-        assert self.round.status.name == "seeds_training"
+        assert self.round.status.name == orm.RoundStatus.seeds_training.name
         # get trial dir
         trial_base = ospj(self.pm.nni_home, self.round.nni_seeds_id, 'trials')
         trials = os.listdir(trial_base)
-        assert len(trials) == 1, "expected exactly 1 trial for seed training of round {}/split{}".format(
-            self.id, self.split)
-        trial = trials[0]
-        # link best model
-        robust_4_me_symlink(ospj(trial_base, trial, 'best_model.h5'), self.pm.h5_round_seed(self))
+        assert len(trials) == self.n_seeds, "expected exactly {} trials for seed training of round {}/split{}".format(
+            self.n_seeds, self.id, self.split)
+        # link all models for loading and eval
+        for trial in trials:
+            data_name = self.data_dir_frm_json(trial_base, trial)
+            seed_model = self.seed_model_from_sm_str(data_name)
+            robust_4_me_symlink(ospj(trial_base, trial, 'best_model.h5'), self.pm.h5_round_seed(self, seed_model))
         self.stop_nni()
 
     def start_seed_evaluation(self):
-        self.start_nni(status_in="seeds_training",
-                       status_out="seeds_evaluating",
+        self.start_nni(status_in=orm.RoundStatus.seeds_training.name,
+                       status_out=orm.RoundStatus.seeds_evaluating.name,
                        nni_dir=self.pm.nni_evaluation_seed_round(self),
                        record_to='nni_seeds_eval_id')
 
     def start_adj_training(self):
-        self.start_nni(status_in="seeds_evaluating",
-                       status_out="adjustments_training",
+        self.start_nni(status_in=orm.RoundStatus.adjustments_prepped.name,
+                       status_out=orm.RoundStatus.adjustments_training.name,
                        nni_dir=self.pm.nni_training_adj_round(self),
                        record_to='nni_adjustments_id')
 
+    @staticmethod
+    def data_dir_frm_json(trial_base, trial):
+        with open(ospj(trial_base, trial, 'parameter.cfg')) as f:
+            pars = json.load(f)
+        data_dir = pars['parameters']['data_dir']
+        if data_dir.endswith('/'):
+            data_dir = data_dir[:-1]
+        return data_dir.split('/')[-1]
+
     def check_and_link_adj_results(self):
-        assert self.round.status.name == "adjustments_training"
+        assert self.round.status.name == orm.RoundStatus.adjustments_training.name
         # get trial dir
         trial_base = ospj(self.pm.nni_home, self.round.nni_adjustment_id, 'trials')
         trials = os.listdir(trial_base)
@@ -500,10 +524,7 @@ class RoundHandler:
         # link best model
         to_add = []
         for trial in trials:
-            with open(ospj(trial_base, trial, 'parameter.cfg')) as f:
-                pars = json.load(f)
-            data_dir = pars['parameters']['data_dir']
-            full_adj_str = data_dir.split('/')[-1]
+            full_adj_str = self.data_dir_frm_json(trial_base, trial)
             robust_4_me_symlink(ospj(trial_base, trial, 'best_model.h5'), self.pm.h5_round_custom(self, full_adj_str))
             # also create a db entry for the AdjustmentModel
             sp_id, delta_n_species = self.sp_id_and_delta_from_adj_str(full_adj_str)
@@ -548,17 +569,17 @@ class RoundHandler:
         return seed_model
 
     def start_adj_evaluation(self):
-        self.start_nni(status_in="adjustments_training",
-                       status_out="adjustments_evaluating",
+        self.start_nni(status_in=orm.RoundStatus.adjustments_training.name,
+                       status_out=orm.RoundStatus.adjustments_evaluating.name,
                        nni_dir=self.pm.nni_evaluation_adj_round(self),
                        record_to='nni_adjustments_eval_id')
 
     def check_and_process_evaluation_results(self, is_fine_tune):
         """from evaluation nni log files to db record there of"""
         if is_fine_tune:
-            assert self.round.status.name == "adjustments_evaluating"
+            assert self.round.status.name == orm.RoundStatus.adjustments_evaluating.name
         else:
-            assert self.round.status.name == "seeds_evaluating"
+            assert self.round.status.name == orm.RoundStatus.seeds_evaluating.name
 
         # get trial dir
         trial_base = ospj(self.pm.nni_home, self.round.nni_eval_id, 'trials')
@@ -639,8 +660,11 @@ class RoundHandler:
         return weighted_res
 
     def adjust_seeds_since(self, prev_round, maximum_changes):
-        prev_models = prev_round.round.evaluation_models
-        trainers = [x for x in prev_round.seed_training_species]
+        assert isinstance(prev_round, type(self))
+        # take the best seed model, and apply adjustments that were beneficial as fine-tuning
+        prev_best_seed_model = prev_round.best_seed_model()
+        prev_models = [em for em in prev_round.round.evaluation_models if em.is_fine_tuned]
+        trainers = [x for x in prev_round.seed_model_training_species(prev_best_seed_model)]
         # sort descending genic f1
         sorted_prev = sorted(prev_models, key=lambda x: - x.weighted_test_genic_f1)
         n_changed = 0
@@ -667,6 +691,8 @@ class RoundHandler:
         self.session.add(seed_model)
         self.session.add_all(seed_trainers)
         self.session.commit()
+        # all other seed models are set randomly
+        self.set_random_seeds(n_already_set=1)
 
 
 class Configgy:
@@ -697,13 +723,15 @@ class Configgy:
         return most
 
     def fmt_train_seed(self):
-        search_space = {'data_dir': {'_type': "choice", "_value": [self.rh.pm.data_round_seed(self.rh)]}}
+        data_dirs = [self.rh.pm.data_round_seed(self.rh, sm) for sm in self.rh.seed_models]
+        search_space = {'data_dir': {'_type': "choice", "_value": data_dirs}}
         config_str = self.config()
         return config_str, search_space
 
     def fmt_train_adjust(self):
+        seed_model = self.rh.best_seed_model()
         config_str = self.config('--resume-training --load-model-path {}'.format(
-            self.rh.pm.h5_round_seed(self.rh)))
+            self.rh.pm.h5_round_seed(self.rh, seed_model)))
         infold_species = self.rh.session.query(orm.Species).filter(orm.Species.split == self.rh.split).\
             filter(orm.Species.is_quality).all()
 
@@ -712,7 +740,7 @@ class Configgy:
         search_space = {'data_dir': {'_type': "choice", "_value": data_dirs}}
         return config_str, search_space
 
-    def fmt_evaluations(self):
+    def fmt_adj_evaluations(self):
         config_str = self.config('--eval')
         xfold_species = self.rh.session.query(orm.Species).filter(orm.Species.split != self.rh.split).\
             filter(orm.Species.is_quality).all()
@@ -721,6 +749,17 @@ class Configgy:
         test_datas = [self.rh.pm.subset_h5(sp.name) for sp in xfold_species]
         load_model_paths = [self.rh.pm.h5_round_adj(self.rh)] + [self.rh.pm.h5_round_adj_sp(self.rh, sp.name)
                                                                  for sp in infold_species]
+        search_space = {'test_data': {'_type': "choice", "_value": test_datas},
+                        'load_model_path': {'_type': 'choice', '_value': load_model_paths}}
+        return config_str, search_space
+
+    def fmt_seed_evaluations(self):
+        config_str = self.config('--eval')
+        xfold_species = self.rh.session.query(orm.Species).filter(orm.Species.split != self.rh.split).\
+            filter(orm.Species.is_quality).all()
+        seed_models = self.rh.session.query(orm.SeedModel).filter(orm.Round.id == self.rh.id).all()
+        test_datas = [self.rh.pm.subset_h5(sp.name) for sp in xfold_species]
+        load_model_paths = [self.rh.pm.h5_round_seed(self.rh, sm) for sm in seed_models] # todo
         search_space = {'test_data': {'_type': "choice", "_value": test_datas},
                         'load_model_path': {'_type': 'choice', '_value': load_model_paths}}
         return config_str, search_space

@@ -26,8 +26,10 @@ def cli():
 @click.option('--exact-match', is_flag=True)
 @click.option('--passed-meta-filter', help='output of spselect metafilter')
 @click.option('--tuner-gpu-indices', type=str, help='gpu indices to constrain nni to (e.g. 0 or 1-3 or 1,2,3')
+@click.option('--n-seeds', type=int, default=3, help='number of seed models to train. N random at first, '
+                                                     'then 1 optimized + N - 1 random')
 def setup(working_dir, species_full, species_subset, tree, nni_config, exact_match, passed_meta_filter,
-          tuner_gpu_indices):
+          tuner_gpu_indices, n_seeds):
     """prepares sqlitedb, species weighting and splitting, etc for later use"""
     # check naming in species full/subset that everything matches
     list_full = os.listdir(species_full)
@@ -68,12 +70,12 @@ def setup(working_dir, species_full, species_subset, tree, nni_config, exact_mat
     gpu_indices = divvy_up_gpu_indices(tuner_gpu_indices)
     for split in [0, 1]:
         # ID to split because it needs to make two _different_ rounds at the start (should clean)
-        r = dbmanagement.RoundHandler(session, split=split, id=split, gpu_indices=gpu_indices[split])
+        r = dbmanagement.RoundHandler(session, split=split, id=split, gpu_indices=gpu_indices[split], n_seeds=n_seeds)
         # randomly select training seed species for each set
-        r.set_first_seeds()
+        r.set_random_seeds()
         # initialize and prep first round (seed training, adjustment training, model renaming (more symlinks), eval
-        r.setup_data()
-        r.setup_control_files()
+        r.setup_seed_data()
+        r.setup_seed_control_files()
         r.start_seed_training()
 
 
@@ -82,7 +84,9 @@ def setup(working_dir, species_full, species_subset, tree, nni_config, exact_mat
 @click.option('--tuner-gpu-indices', type=str, help='gpu indices to constrain nni to (e.g. 0 or 1-3 or 1,2,3')
 @click.option('--maximum-changes', type=int, default=6, help='the N largest improvements will be performed '
                                                              '(unless < N improvements are available)')
-def ss_next(working_dir, tuner_gpu_indices, maximum_changes):
+@click.option('--n-seeds', type=int, default=3, help='number of seed models to train. N random at first, '
+                                                     'then 1 optimized + N - 1 random')
+def ss_next(working_dir, tuner_gpu_indices, maximum_changes, n_seeds):
     click.echo(f'will setup and run next step for {working_dir}')
     # if latest round status is 2, start training seeds
     engine, session = dbmanagement.mk_session(os.path.join(working_dir, 'spselec.sqlite3'), new_db=False)
@@ -93,25 +97,26 @@ def ss_next(working_dir, tuner_gpu_indices, maximum_changes):
         status = r.round.status.name
         print(f'resuming from status "{status}"')
         # if status was seeds_training, check and record output/nni IDs of above, start fine tuning adjustments
-        if status == "seeds_training":
+        if status == orm.RoundStatus.seeds_training.name:
             r.check_and_link_seed_results()
             r.start_seed_evaluation()
-        elif status == "seeds_evaluating":
+        elif status == orm.RoundStatus.seeds_evaluating.name:
             r.check_and_process_evaluation_results(is_fine_tune=False)
             r.setup_adjustment_data()
+            r.setup_adj_control_files()
             r.start_adj_training()
         # if status was adjustment training, check and record output/nni IDs of above, start evaluation
-        elif status == "adjustments_training":
+        elif status == orm.RoundStatus.adjustments_training.name:
             r.check_and_link_adj_results()
             r.start_adj_evaluation()
         # if status was evaluation, check output of above, record evaluation results, init, prep and start next round
-        elif status == "seeds_evaluating":
+        elif status == orm.RoundStatus.adjustments_evaluating.name:
             r.check_and_process_evaluation_results(is_fine_tune=True)
             new_r = dbmanagement.RoundHandler(session, split, latest_round_id + 2,  # because two splits
-                                              gpu_indices=gpu_indices[split])
+                                              gpu_indices=gpu_indices[split], n_seeds=n_seeds)
             new_r.adjust_seeds_since(r, maximum_changes=maximum_changes)
             new_r.setup_seed_data()
-            new_r.setup_control_files()  # end with status 'prepped'
+            new_r.setup_seed_control_files()  # end with status 'prepped'
             new_r.start_seed_training()  # end with status 'seeds_training'
 
 
