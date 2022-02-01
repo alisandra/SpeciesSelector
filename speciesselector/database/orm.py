@@ -84,7 +84,7 @@ class EvaluationModel(Base):
     species_id = Column(Integer, ForeignKey('species.id'))
     species = relationship('Species')
     delta_n_species = Column(Integer)  # -1 for removed, 0 unchanged, 1 for added
-    is_fine_tuned = Column(Boolean)  # False for seed models, True for adjustment models
+    is_fine_tuned = Column(Boolean, nullable=False)  # False for seed models, True for adjustment models
     # raw_results will be aggregated and weighted to fill weighted columns below
     raw_results = relationship('RawResult', back_populates='evaluation_model')
     weighted_test_genic_f1 = Column(Float)

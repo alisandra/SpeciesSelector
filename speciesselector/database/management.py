@@ -392,7 +392,7 @@ class RoundHandler:
         cfg_ssj = configgy.fmt_train_seed()
         configgy.write_to(cfg_ssj, self.pm.nni_training_seed_round(self))
         # eval seed
-        configgy.fmt_seed_evaluations()
+        cfg_ssj = configgy.fmt_seed_evaluations()
         configgy.write_to(cfg_ssj, self.pm.nni_evaluation_seed_round(self))
         self.round.status = orm.RoundStatus.seeds_prepped.name
         self.session.add(self.round)
@@ -486,11 +486,24 @@ class RoundHandler:
         trials = os.listdir(trial_base)
         assert len(trials) == self.n_seeds, "expected exactly {} trials for seed training of round {}/split{}".format(
             self.n_seeds, self.id, self.split)
-        # link all models for loading and eval
+        to_add = []
         for trial in trials:
             data_name = self.data_dir_frm_json(trial_base, trial)
             seed_model = self.seed_model_from_sm_str(data_name)
+            # link all models for loading and eval
             robust_4_me_symlink(ospj(trial_base, trial, 'best_model.h5'), self.pm.h5_round_seed(self, seed_model))
+            # and add to db
+            existing_matches = self.session.query(orm.EvaluationModel).\
+                filter(orm.EvaluationModel.round_id == self.id).\
+                filter(orm.EvaluationModel.seed_model_id == seed_model.id).\
+                filter(orm.EvaluationModel.is_fine_tuned).all()
+            if not existing_matches:
+                adj_model = orm.EvaluationModel(round=self.round, is_fine_tuned=False,
+                                                delta_n_species=0,  # seeds have no modification
+                                                seed_model=seed_model)
+                to_add.append(adj_model)
+        self.session.add_all(to_add)
+        self.session.commit()
         self.stop_nni()
 
     def start_seed_evaluation(self):
@@ -517,7 +530,7 @@ class RoundHandler:
     def check_and_link_adj_results(self):
         assert self.round.status.name == orm.RoundStatus.adjustments_training.name
         # get trial dir
-        trial_base = ospj(self.pm.nni_home, self.round.nni_adjustment_id, 'trials')
+        trial_base = ospj(self.pm.nni_home, self.round.nni_adjustments_id, 'trials')
         trials = os.listdir(trial_base)
         assert len(trials) > 1, "expected multiple adjustment trials but found only {} for round{}/split{}".format(
             len(trials), self.id, self.split)
@@ -534,7 +547,7 @@ class RoundHandler:
                 filter(orm.EvaluationModel.species_id == sp_id).\
                 filter(orm.EvaluationModel.is_fine_tuned).all()
             if not existing_matches:
-                adj_model = orm.EvaluationModel(round=self.round, species_id=sp_id,
+                adj_model = orm.EvaluationModel(round=self.round, species_id=sp_id, is_fine_tuned=True,
                                                 delta_n_species=delta_n_species, seed_model=self.best_seed_model())
                 to_add.append(adj_model)
         self.session.add_all(to_add)
@@ -574,15 +587,15 @@ class RoundHandler:
                        nni_dir=self.pm.nni_evaluation_adj_round(self),
                        record_to='nni_adjustments_eval_id')
 
-    def check_and_process_evaluation_results(self, is_fine_tune):
+    def check_and_process_evaluation_results(self, is_fine_tuned):
         """from evaluation nni log files to db record there of"""
-        if is_fine_tune:
+        if is_fine_tuned:
             assert self.round.status.name == orm.RoundStatus.adjustments_evaluating.name
+            trial_base = ospj(self.pm.nni_home, self.round.nni_adjustments_eval_id, 'trials')
         else:
             assert self.round.status.name == orm.RoundStatus.seeds_evaluating.name
-
+            trial_base = ospj(self.pm.nni_home, self.round.nni_seeds_eval_id, 'trials')
         # get trial dir
-        trial_base = ospj(self.pm.nni_home, self.round.nni_eval_id, 'trials')
         trials = os.listdir(trial_base)
         assert len(trials) > 1, "expected multiple adjustment trials but found only {} for round{}/split{}".format(
             len(trials), self.id, self.split)
@@ -591,7 +604,7 @@ class RoundHandler:
             results = parse_eval_log(ospj(trial_base, trial, 'trial.log'))
             test_sp, full_train_data_str = self.train_info_from_json(trial_base, trial)
             # record data/adj combo
-            if is_fine_tune:
+            if is_fine_tuned:
                 # i.e. this is an adjustment model, named by species
                 sp_id, delta_n_species = self.sp_id_and_delta_from_adj_str(full_train_data_str)
                 eval_model = self.session.query(orm.EvaluationModel).\
@@ -607,15 +620,15 @@ class RoundHandler:
                     filter(orm.EvaluationModel.seed_model_id == seed_model.id).\
                     filter(orm.EvaluationModel.round_id == self.id).\
                     filter(not_(orm.EvaluationModel.is_fine_tuned)).all()
-                assert len(eval_model) == 1, f"{len(eval_model)} (!= 1) seed models found for seed model: {seed_model} in round {self.id}"
+                assert len(eval_model) == 1, f"{len(eval_model)} (!= 1) eval models found for seed model: {seed_model.id} in round {self.id}"
                 eval_model = eval_model[0]
             self.add_result2db(results, test_sp, eval_model)
         self.session.commit()
         # aggregate eval data for the round
         to_add = []
         for eval_model in self.round.evaluation_models:
-            # skip seeds (is_fine_tune = False) when running for adjustments
-            if eval_model.is_fine_tune == is_fine_tune:
+            # skip seeds (is_fine_tuned = False) when running for adjustments
+            if eval_model.is_fine_tuned == is_fine_tuned:
                 raw_results = eval_model.raw_results
                 for f1_str in ["genic_f1", "intergenic_f1", "utr_f1", "cds_f1", "intron_f1"]:
                     weighted = self.aggregate_res(f1_str, raw_results)
@@ -757,9 +770,9 @@ class Configgy:
         config_str = self.config('--eval')
         xfold_species = self.rh.session.query(orm.Species).filter(orm.Species.split != self.rh.split).\
             filter(orm.Species.is_quality).all()
-        seed_models = self.rh.session.query(orm.SeedModel).filter(orm.Round.id == self.rh.id).all()
+        seed_models = self.rh.seed_models
         test_datas = [self.rh.pm.subset_h5(sp.name) for sp in xfold_species]
-        load_model_paths = [self.rh.pm.h5_round_seed(self.rh, sm) for sm in seed_models] # todo
+        load_model_paths = [self.rh.pm.h5_round_seed(self.rh, sm) for sm in seed_models]
         search_space = {'test_data': {'_type': "choice", "_value": test_datas},
                         'load_model_path': {'_type': 'choice', '_value': load_model_paths}}
         return config_str, search_space
