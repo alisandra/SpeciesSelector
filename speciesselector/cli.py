@@ -125,30 +125,37 @@ def ss_next(working_dir, tuner_gpu_indices, maximum_changes, n_seeds):
 @click.option('--tuner-gpu-indices', type=str, help='gpu indices to constrain nni to (e.g. 0 or 1-3 or 1,2,3')
 @click.option('--maximum-changes', type=int, default=6, help='the N largest improvements will be performed '
                                                              '(unless < N improvements are available)')
-def pause(working_dir, tuner_gpu_indices, maximum_changes):
+@click.option('--n-seeds', type=int, default=3, help='number of seed models to train. N random at first, '
+                                                     'then 1 optimized + N - 1 random')
+def pause(working_dir, tuner_gpu_indices, maximum_changes, n_seeds):
     """check and enter results of a run, and prep next without sarting"""
     click.echo(f'will wrap up current step and prep next for {working_dir}')
     engine, session = dbmanagement.mk_session(os.path.join(working_dir, 'spselec.sqlite3'), new_db=False)
     gpu_indices = divvy_up_gpu_indices(tuner_gpu_indices)
     for split in [0, 1]:
         latest_round_id = max(x.id for x in (session.query(orm.Round).filter(orm.Round.split == split).all()))
-        r = dbmanagement.RoundHandler(session, split, latest_round_id, gpu_indices=gpu_indices[split])
+        r = dbmanagement.RoundHandler(session, split, latest_round_id, gpu_indices=gpu_indices[split], n_seeds=n_seeds)
         status = r.round.status.name
         print(f'pausing from status "{status}"')
         # if status was seeds_training, check and record output/nni IDs of above
-        if status == "seeds_training":
+        if status == orm.RoundStatus.seeds_training.name:
             r.check_and_link_seed_results()  # status unchanged
+        # if status was seed eval, check and record output, prep adjustment train and eval
+        elif status == orm.RoundStatus.seeds_evaluating.name:
+            r.check_and_process_evaluation_results(is_fine_tuned=False)
+            r.setup_adjustment_data()
+            r.setup_adj_control_files()  # end with status ajd prepped
         # if status was adjustment training, check and record output/nni IDs of above
-        elif status == "adjustments_training":
+        elif status == orm.RoundStatus.adjustments_training.name:
             r.check_and_link_adj_results()
         # if status was evaluation, check output of above, record evaluation results, init and prep next round
-        elif status == "seeds_evaluating":
+        elif status == orm.RoundStatus.adjustments_evaluating.name:
             r.check_and_process_evaluation_results(is_fine_tuned=True)
             new_r = dbmanagement.RoundHandler(session, split, latest_round_id + 2,  # because two splits
-                                              gpu_indices=gpu_indices[split])
+                                              gpu_indices=gpu_indices[split], n_seeds=n_seeds)
             new_r.adjust_seeds_since(r, maximum_changes=maximum_changes)
             new_r.setup_data()
-            new_r.setup_control_files()  # end with status 'prepped'
+            new_r.setup_control_files()  # end with status seeds prepped
 
 
 @cli.command()
@@ -160,17 +167,19 @@ def resume(working_dir):
     engine, session = dbmanagement.mk_session(os.path.join(working_dir, 'spselec.sqlite3'), new_db=False)
     for split in [0, 1]:
         latest_round_id = max(x.id for x in (session.query(orm.Round).filter(orm.Round.split == split).all()))
-        r = dbmanagement.RoundHandler(session, split, latest_round_id, gpu_indices=None)
+        r = dbmanagement.RoundHandler(session, split, latest_round_id, gpu_indices=None, n_seeds=None)
         status = r.round.status.name
         print(f'resuming from status "{status}"')
         # if status was seeds_training, check and record output/nni IDs of above, start fine tuning adjustments
-        if status == "seeds_training":
+        if status == orm.RoundStatus.seeds_training.name:
+            r.start_seed_evaluation()
+        elif status == orm.RoundStatus.adjustments_prepped.name:
             r.start_adj_training()
-        # if status was adjustment training, check and record output/nni IDs of above, start evaluation
-        elif status == "adjustments_training":
+        # if status was adjustment training, start evaluation
+        elif status == orm.RoundStatus.adjustments_training.name:
             r.start_adj_evaluation()
-        # if status was prepped, start next round
-        elif status == "prepped":
+        # if status was seeds prepped, start next round
+        elif status == orm.RoundStatus.seeds_prepped.name:
             r.start_seed_training()
 
 
