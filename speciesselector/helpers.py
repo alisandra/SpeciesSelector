@@ -1,6 +1,15 @@
 import re
 
 
+def split_list(split):
+    """splits to run as list"""
+    if split is None:
+        return [0, 1]
+    else:
+        assert isinstance(split, int)
+        return [split]
+
+
 def match_tree_names_exact(tree_names, sp_dirs):
     """makes sure they __all__ match exactly"""
     t2skey = {}

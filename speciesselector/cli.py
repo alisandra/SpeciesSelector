@@ -8,7 +8,8 @@ from .database import orm
 import shutil
 import pandas as pd
 from .filtering.filter import UTRFilter, BuscoFilter, AltSpliceFilter, exemptions_as_sp_names
-from .helpers import divvy_up_gpu_indices
+from .helpers import (divvy_up_gpu_indices,
+                      split_list)
 
 
 @click.group()
@@ -28,8 +29,10 @@ def cli():
 @click.option('--tuner-gpu-indices', type=str, help='gpu indices to constrain nni to (e.g. 0 or 1-3 or 1,2,3')
 @click.option('--n-seeds', type=int, default=3, help='number of seed models to train. N random at first, '
                                                      'then 1 optimized + N - 1 random')
+@click.option('--only-split', type=int, default=None,
+              help='specify 0 or 1 to start just one split (e.g. in case of previous failure)')
 def setup(working_dir, species_full, species_subset, tree, nni_config, exact_match, passed_meta_filter,
-          tuner_gpu_indices, n_seeds):
+          tuner_gpu_indices, n_seeds, only_split):
     """prepares sqlitedb, species weighting and splitting, etc for later use"""
     # check naming in species full/subset that everything matches
     list_full = os.listdir(species_full)
@@ -68,7 +71,7 @@ def setup(working_dir, species_full, species_subset, tree, nni_config, exact_mat
     # this also splits species into sets (2)
     dbmanagement.add_species_from_tree(tree, list_full, session, exact_match, quality_sp)
     gpu_indices = divvy_up_gpu_indices(tuner_gpu_indices)
-    for split in [0, 1]:
+    for split in split_list(only_split):  # [0, 1] unless specified
         # ID to split because it needs to make two _different_ rounds at the start (should clean)
         r = dbmanagement.RoundHandler(session, split=split, id=split, gpu_indices=gpu_indices[split], n_seeds=n_seeds)
         # randomly select training seed species for each set
@@ -86,12 +89,14 @@ def setup(working_dir, species_full, species_subset, tree, nni_config, exact_mat
                                                              '(unless < N improvements are available)')
 @click.option('--n-seeds', type=int, default=3, help='number of seed models to train. N random at first, '
                                                      'then 1 optimized + N - 1 random')
-def ss_next(working_dir, tuner_gpu_indices, maximum_changes, n_seeds):
+@click.option('--only-split', type=int, default=None,
+              help='specify 0 or 1 to start just one split (e.g. in case of previous failure)')
+def ss_next(working_dir, tuner_gpu_indices, maximum_changes, n_seeds, only_split):
     click.echo(f'will setup and run next step for {working_dir}')
     # if latest round status is 2, start training seeds
     engine, session = dbmanagement.mk_session(os.path.join(working_dir, 'spselec.sqlite3'), new_db=False)
     gpu_indices = divvy_up_gpu_indices(tuner_gpu_indices)
-    for split in [0, 1]:
+    for split in split_list(only_split):
         latest_round_id = max(x.id for x in (session.query(orm.Round).filter(orm.Round.split == split).all()))
         r = dbmanagement.RoundHandler(session, split, latest_round_id, gpu_indices=gpu_indices[split], n_seeds=n_seeds)
         status = r.round.status.name
@@ -127,12 +132,14 @@ def ss_next(working_dir, tuner_gpu_indices, maximum_changes, n_seeds):
                                                              '(unless < N improvements are available)')
 @click.option('--n-seeds', type=int, default=3, help='number of seed models to train. N random at first, '
                                                      'then 1 optimized + N - 1 random')
-def pause(working_dir, tuner_gpu_indices, maximum_changes, n_seeds):
+@click.option('--only-split', type=int, default=None,
+              help='specify 0 or 1 to start just one split (e.g. in case of previous failure)')
+def pause(working_dir, tuner_gpu_indices, maximum_changes, n_seeds, only_split):
     """check and enter results of a run, and prep next without sarting"""
     click.echo(f'will wrap up current step and prep next for {working_dir}')
     engine, session = dbmanagement.mk_session(os.path.join(working_dir, 'spselec.sqlite3'), new_db=False)
     gpu_indices = divvy_up_gpu_indices(tuner_gpu_indices)
-    for split in [0, 1]:
+    for split in split_list(only_split):
         latest_round_id = max(x.id for x in (session.query(orm.Round).filter(orm.Round.split == split).all()))
         r = dbmanagement.RoundHandler(session, split, latest_round_id, gpu_indices=gpu_indices[split], n_seeds=n_seeds)
         status = r.round.status.name
@@ -160,12 +167,14 @@ def pause(working_dir, tuner_gpu_indices, maximum_changes, n_seeds):
 
 @cli.command()
 @click.option('--working-dir', required=True)
-def resume(working_dir):
+@click.option('--only-split', type=int, default=None,
+              help='specify 0 or 1 to start just one split (e.g. in case of previous failure)')
+def resume(working_dir, only_split):
     """resume (without any result checking or setup) a paused run"""
     click.echo(f'will run next step for {working_dir}')
     # if latest round status is 2, start training seeds
     engine, session = dbmanagement.mk_session(os.path.join(working_dir, 'spselec.sqlite3'), new_db=False)
-    for split in [0, 1]:
+    for split in split_list(only_split):
         latest_round_id = max(x.id for x in (session.query(orm.Round).filter(orm.Round.split == split).all()))
         r = dbmanagement.RoundHandler(session, split, latest_round_id, gpu_indices=None, n_seeds=None)
         status = r.round.status.name
