@@ -24,6 +24,24 @@ def match_tree_names_exact(tree_names, sp_dirs):
     return t2skey
 
 
+def match_tree_names_refseq(tree_names, sp_dirs):
+    """makes sure they match except for underscores/space"""
+    t2skey = {}
+    sp_dirs = sp_dirs.copy()
+    for tn in tree_names:
+        underscore_tn = re.sub(' - .*', '', tn)  # remove ' - <taxid>'
+        underscore_tn = re.sub(' ', '_', underscore_tn)
+        underscore_tn = re.sub('__', '_', underscore_tn)  # where tree had '_ ', refseq has '_'
+        if underscore_tn in sp_dirs:
+            sp_dirs.remove(underscore_tn)
+            t2skey[tn] = underscore_tn
+        else:
+            print(underscore_tn)
+            raise ValueError(f"{tn} could not be exact matched to any remaining option: {sp_dirs}")
+    assert not len(sp_dirs), "unmatched species remaining"
+    return t2skey
+
+
 def match_tree_names_plants(tree_names, sp_dirs):
     """matches between Gspecies and 'genus species -- taxid', with some noise tolerance (as necessary for plants)"""
     sp_dirs = sp_dirs.copy()

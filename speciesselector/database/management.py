@@ -7,7 +7,11 @@ from . import orm
 from sqlalchemy import create_engine, not_
 from sqlalchemy.orm import sessionmaker
 from ete3 import Tree
-from speciesselector.helpers import match_tree_names_plants, match_tree_names_exact, parse_eval_log, F1Decode
+from speciesselector.helpers import (match_tree_names_plants,
+                                     match_tree_names_exact,
+                                     parse_eval_log,
+                                     F1Decode,
+                                     match_tree_names_refseq)
 import math
 import random
 import json
@@ -41,11 +45,13 @@ class Toggle:
         return ret
 
 
-def add_species_from_tree(tree_path, sp_names, session, exact_match, quality_sp):
+def add_species_from_tree(tree_path, sp_names, session, exact_match, refseq_match, quality_sp):
     newicktree = Tree(tree_path)
     tree_names = [x.name for x in newicktree.get_descendants() if x.is_leaf()]
     if exact_match:
         match_fn = match_tree_names_exact
+    elif refseq_match:
+        match_fn = match_tree_names_refseq
     else:
         match_fn = match_tree_names_plants
     t2skey = match_fn(tree_names, sp_names)

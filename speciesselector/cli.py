@@ -25,6 +25,7 @@ def cli():
 @click.option('--tree', required=True)
 @click.option('--nni-config', required=True)
 @click.option('--exact-match', is_flag=True)
+@click.option('--refseq-match', is_flag=True)
 @click.option('--passed-meta-filter', help='output of spselect metafilter')
 @click.option('--tuner-gpu-indices', type=str, help='gpu indices to constrain nni to (e.g. 0 or 1-3 or 1,2,3')
 @click.option('--n-seeds', type=int, default=3, help='number of seed models to train. N random at first, '
@@ -33,7 +34,7 @@ def cli():
                                                                        'this number or half the available species')
 @click.option('--only-split', type=int, default=None,
               help='specify 0 or 1 to start just one split (e.g. in case of previous failure)')
-def setup(working_dir, species_full, species_subset, tree, nni_config, exact_match, passed_meta_filter,
+def setup(working_dir, species_full, species_subset, tree, nni_config, exact_match, refseq_match, passed_meta_filter,
           tuner_gpu_indices, n_seeds, max_seed_training_species, only_split):
     """prepares sqlitedb, species weighting and splitting, etc for later use"""
     # check naming in species full/subset that everything matches
@@ -71,7 +72,7 @@ def setup(working_dir, species_full, species_subset, tree, nni_config, exact_mat
     # assign weight to species according to depth in tree (deeper, where more species are, is lower)
     # this is so that the trained models are selected for lower phylogenetic bias than the input data
     # this also splits species into sets (2)
-    dbmanagement.add_species_from_tree(tree, list_full, session, exact_match, quality_sp)
+    dbmanagement.add_species_from_tree(tree, list_full, session, exact_match, refseq_match, quality_sp)
     gpu_indices = divvy_up_gpu_indices(tuner_gpu_indices)
     for split in split_list(only_split):  # [0, 1] unless specified
         # ID to split because it needs to make two _different_ rounds at the start (should clean)
