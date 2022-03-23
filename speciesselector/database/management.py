@@ -272,7 +272,7 @@ def robust_4_me_symlink(src, dest):
 
 
 class RoundHandler:
-    def __init__(self, session, split, id, gpu_indices, n_seeds):
+    def __init__(self, session, split, id, gpu_indices, n_seeds, max_seed_training_species):
         self.session = session
         self.split = split
         self.id = id
@@ -280,6 +280,7 @@ class RoundHandler:
         self.base_port = 8080  # todo, parameterize to allow user flexible port usage
         self.pm = PathMaker(session)
         self.n_seeds = n_seeds
+        self.max_seed_training_species = max_seed_training_species
 
         # check for existing round
         rounds = session.query(orm.Round).filter(orm.Round.id == id).all()
@@ -292,15 +293,16 @@ class RoundHandler:
         else:
             raise ValueError(f"{len(rounds)} rounds found with id {id}???")
 
-    def set_random_seeds(self, max_seed_training_sp=8, n_already_set=0):
+    def set_random_seeds(self, n_already_set=0):
         # get all species in set
         set_sp = self.session.query(orm.Species).filter(orm.Species.split == self.split).\
             filter(orm.Species.is_quality).all()
-        max_seed_training_sp = min(max_seed_training_sp, len(set_sp) // 2)  # leave at least half for validation
+        n_seed_training_sp = min(self.max_seed_training_species,
+                                 len(set_sp) // 2)  # leave at least half for validation
         # select trainers
         for _ in range(self.n_seeds - n_already_set):
             random.shuffle(set_sp)
-            trainers = set_sp[:max_seed_training_sp]
+            trainers = set_sp[:n_seed_training_sp]
             # setup seed models & seed trainers
             seed_model = orm.SeedModel(split=self.split, round=self.round)
             seed_trainers = [orm.SeedTrainingSpecies(species=s, seed_model=seed_model) for s in trainers]
