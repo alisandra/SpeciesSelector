@@ -32,12 +32,16 @@ def match_tree_names_refseq(tree_names, sp_dirs):
         underscore_tn = re.sub(' - .*', '', tn)  # remove ' - <taxid>'
         underscore_tn = re.sub(' ', '_', underscore_tn)
         underscore_tn = re.sub('__', '_', underscore_tn)  # where tree had '_ ', refseq has '_'
+        plural_tn = re.sub('us$', 'a', underscore_tn)
         if underscore_tn in sp_dirs:
             sp_dirs.remove(underscore_tn)
             t2skey[tn] = underscore_tn
+        elif plural_tn in sp_dirs:
+            sp_dirs.remove(plural_tn)
+            t2skey[tn] = plural_tn
         else:
             print(underscore_tn)
-            raise ValueError(f"{tn} could not be exact matched to any remaining option: {sp_dirs}")
+            raise ValueError(f"{tn} could not be refseq matched to any remaining option: {sp_dirs}")
     assert not len(sp_dirs), "unmatched species remaining"
     return t2skey
 
