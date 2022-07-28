@@ -278,12 +278,12 @@ def robust_4_me_symlink(src, dest):
 
 
 class RoundHandler:
-    def __init__(self, session, split, id, gpu_indices, n_seeds, max_seed_training_species):
+    def __init__(self, session, split, id, gpu_indices, n_seeds, max_seed_training_species, base_port):
         self.session = session
         self.split = split
         self.id = id
         self.gpu_indices = gpu_indices
-        self.base_port = 8080  # todo, parameterize to allow user flexible port usage
+        self.base_port = base_port
         self.pm = PathMaker(session)
         self.n_seeds = n_seeds
         self.max_seed_training_species = max_seed_training_species

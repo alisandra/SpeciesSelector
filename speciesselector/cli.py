@@ -27,6 +27,7 @@ def cli():
 @click.option('--exact-match', is_flag=True)
 @click.option('--refseq-match', is_flag=True)
 @click.option('--passed-meta-filter', help='output of spselect metafilter')
+@click.option('--base-port', type=int, default=8080)
 @click.option('--tuner-gpu-indices', type=str, help='gpu indices to constrain nni to (e.g. 0 or 1-3 or 1,2,3')
 @click.option('--n-seeds', type=int, default=3, help='number of seed models to train. N random at first, '
                                                      'then 1 optimized + N - 1 random')
@@ -35,7 +36,7 @@ def cli():
 @click.option('--only-split', type=int, default=None,
               help='specify 0 or 1 to start just one split (e.g. in case of previous failure)')
 def setup(working_dir, species_full, species_subset, tree, nni_config, exact_match, refseq_match, passed_meta_filter,
-          tuner_gpu_indices, n_seeds, max_seed_training_species, only_split):
+          tuner_gpu_indices, n_seeds, max_seed_training_species, only_split, base_port):
     """prepares sqlitedb, species weighting and splitting, etc for later use"""
     # check naming in species full/subset that everything matches
     list_full = os.listdir(species_full)
@@ -77,7 +78,7 @@ def setup(working_dir, species_full, species_subset, tree, nni_config, exact_mat
     for split in split_list(only_split):  # [0, 1] unless specified
         # ID to split because it needs to make two _different_ rounds at the start (should clean)
         r = dbmanagement.RoundHandler(session, split=split, id=split, gpu_indices=gpu_indices[split], n_seeds=n_seeds,
-                                      max_seed_training_species=max_seed_training_species)
+                                      max_seed_training_species=max_seed_training_species, base_port=base_port)
         # randomly select training seed species for each set
         r.set_random_seeds()
         # initialize and prep first round (seed training, adjustment training, model renaming (more symlinks), eval
@@ -88,6 +89,7 @@ def setup(working_dir, species_full, species_subset, tree, nni_config, exact_mat
 
 @cli.command("next")
 @click.option('--working-dir', required=True)
+@click.option('--base-port', type=int, default=8080)
 @click.option('--tuner-gpu-indices', type=str, help='gpu indices to constrain nni to (e.g. 0 or 1-3 or 1,2,3')
 @click.option('--maximum-changes', type=int, default=6, help='the N largest improvements will be performed '
                                                              '(unless < N improvements are available)')
@@ -97,7 +99,7 @@ def setup(working_dir, species_full, species_subset, tree, nni_config, exact_mat
                                                                        'this number or half the available species')
 @click.option('--only-split', type=int, default=None,
               help='specify 0 or 1 to start just one split (e.g. in case of previous failure)')
-def ss_next(working_dir, tuner_gpu_indices, maximum_changes, n_seeds, max_seed_training_species, only_split):
+def ss_next(working_dir, tuner_gpu_indices, maximum_changes, n_seeds, max_seed_training_species, only_split, base_port):
     click.echo(f'will setup and run next step for {working_dir}')
     # if latest round status is 2, start training seeds
     engine, session = dbmanagement.mk_session(os.path.join(working_dir, 'spselec.sqlite3'), new_db=False)
@@ -105,7 +107,7 @@ def ss_next(working_dir, tuner_gpu_indices, maximum_changes, n_seeds, max_seed_t
     for split in split_list(only_split):
         latest_round_id = max(x.id for x in (session.query(orm.Round).filter(orm.Round.split == split).all()))
         r = dbmanagement.RoundHandler(session, split, latest_round_id, gpu_indices=gpu_indices[split], n_seeds=n_seeds,
-                                      max_seed_training_species=max_seed_training_species)
+                                      max_seed_training_species=max_seed_training_species, base_port=base_port)
         status = r.round.status.name
         print(f'resuming from status "{status}"')
         # if status was seeds_training, check and record output/nni IDs of above, start fine tuning adjustments
@@ -125,7 +127,7 @@ def ss_next(working_dir, tuner_gpu_indices, maximum_changes, n_seeds, max_seed_t
         elif status == orm.RoundStatus.adjustments_evaluating.name:
             r.check_and_process_evaluation_results(is_fine_tuned=True)
             new_r = dbmanagement.RoundHandler(session, split, latest_round_id + 2,  # because two splits
-                                              gpu_indices=gpu_indices[split], n_seeds=n_seeds,
+                                              gpu_indices=gpu_indices[split], n_seeds=n_seeds, base_port=base_port,
                                               max_seed_training_species=max_seed_training_species)
             new_r.adjust_seeds_since(r, maximum_changes=maximum_changes)
             new_r.setup_seed_data()
@@ -135,6 +137,7 @@ def ss_next(working_dir, tuner_gpu_indices, maximum_changes, n_seeds, max_seed_t
 
 @cli.command()
 @click.option('--working-dir', required=True)
+@click.option('--base-port', type=int, default=8080)
 @click.option('--tuner-gpu-indices', type=str, help='gpu indices to constrain nni to (e.g. 0 or 1-3 or 1,2,3')
 @click.option('--maximum-changes', type=int, default=6, help='the N largest improvements will be performed '
                                                              '(unless < N improvements are available)')
@@ -144,7 +147,7 @@ def ss_next(working_dir, tuner_gpu_indices, maximum_changes, n_seeds, max_seed_t
                                                                        'this number or half the available species')
 @click.option('--only-split', type=int, default=None,
               help='specify 0 or 1 to start just one split (e.g. in case of previous failure)')
-def pause(working_dir, tuner_gpu_indices, maximum_changes, n_seeds, max_seed_training_species, only_split):
+def pause(working_dir, tuner_gpu_indices, maximum_changes, n_seeds, max_seed_training_species, only_split, base_port):
     """check and enter results of a run, and prep next without sarting"""
     click.echo(f'will wrap up current step and prep next for {working_dir}')
     engine, session = dbmanagement.mk_session(os.path.join(working_dir, 'spselec.sqlite3'), new_db=False)
@@ -152,7 +155,7 @@ def pause(working_dir, tuner_gpu_indices, maximum_changes, n_seeds, max_seed_tra
     for split in split_list(only_split):
         latest_round_id = max(x.id for x in (session.query(orm.Round).filter(orm.Round.split == split).all()))
         r = dbmanagement.RoundHandler(session, split, latest_round_id, gpu_indices=gpu_indices[split], n_seeds=n_seeds,
-                                      max_seed_training_species=max_seed_training_species)
+                                      max_seed_training_species=max_seed_training_species, base_port=base_port)
         status = r.round.status.name
         print(f'pausing from status "{status}"')
         # if status was seeds_training, check and record output/nni IDs of above
@@ -170,7 +173,7 @@ def pause(working_dir, tuner_gpu_indices, maximum_changes, n_seeds, max_seed_tra
         elif status == orm.RoundStatus.adjustments_evaluating.name:
             r.check_and_process_evaluation_results(is_fine_tuned=True)
             new_r = dbmanagement.RoundHandler(session, split, latest_round_id + 2,  # because two splits
-                                              gpu_indices=gpu_indices[split], n_seeds=n_seeds,
+                                              gpu_indices=gpu_indices[split], n_seeds=n_seeds, base_port=base_port,
                                               max_seed_training_species=max_seed_training_species)
             new_r.adjust_seeds_since(r, maximum_changes=maximum_changes)
             new_r.setup_data()
@@ -179,16 +182,18 @@ def pause(working_dir, tuner_gpu_indices, maximum_changes, n_seeds, max_seed_tra
 
 @cli.command()
 @click.option('--working-dir', required=True)
+@click.option('--base-port', type=int, default=8080)
 @click.option('--only-split', type=int, default=None,
               help='specify 0 or 1 to start just one split (e.g. in case of previous failure)')
-def resume(working_dir, only_split):
+def resume(working_dir, only_split, base_port):
     """resume (without any result checking or setup) a paused run"""
     click.echo(f'will run next step for {working_dir}')
     # if latest round status is 2, start training seeds
     engine, session = dbmanagement.mk_session(os.path.join(working_dir, 'spselec.sqlite3'), new_db=False)
     for split in split_list(only_split):
         latest_round_id = max(x.id for x in (session.query(orm.Round).filter(orm.Round.split == split).all()))
-        r = dbmanagement.RoundHandler(session, split, latest_round_id, gpu_indices=None, n_seeds=None)
+        r = dbmanagement.RoundHandler(session, split, latest_round_id, gpu_indices=None, n_seeds=None,
+                                      base_port=base_port, max_seed_training_species=None)
         status = r.round.status.name
         print(f'resuming from status "{status}"')
         # if status was seeds_training, check and record output/nni IDs of above, start fine tuning adjustments
