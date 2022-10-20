@@ -20,7 +20,7 @@ def match_tree_names_exact(tree_names, sp_dirs):
             t2skey[tn] = tn
         else:
             raise ValueError(f"{tn} could not be exact matched to any remaining option: {sp_dirs}")
-    assert not len(sp_dirs), "unmatched species remaining"
+    assert not len(sp_dirs), f"{len(sp_dirs)} unmatched species remaining, the first few are {sp_dirs[:3]}"
     return t2skey
 
 
@@ -42,7 +42,7 @@ def match_tree_names_refseq(tree_names, sp_dirs):
         else:
             print(underscore_tn)
             raise ValueError(f"{tn} could not be refseq matched to any remaining option: {sp_dirs}")
-    assert not len(sp_dirs), "unmatched species remaining"
+    assert not len(sp_dirs), f"{len(sp_dirs)} unmatched species remaining, the first few are {sp_dirs[:3]}"
     return t2skey
 
 
@@ -64,7 +64,7 @@ def match_tree_names_plants(tree_names, sp_dirs):
                 sp_dirs.remove(match_at_start[0])
             else:
                 raise ValueError(f"{tn} could not be matched to any remaining option: {sp_dirs}")
-    assert not len(sp_dirs), "unmatched species remaining"
+    assert not len(sp_dirs), f"{len(sp_dirs)} unmatched species remaining, the first few are {sp_dirs[:3]}"
     t2skey = {t: s for s, t in sp_to_tree.items()}
     return t2skey
 
