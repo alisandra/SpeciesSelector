@@ -169,6 +169,14 @@ class PathMaker:
         return ospj(self.data, self.round(rnd))
 
     @mkdir_neg_p
+    def data_remixes(self, rnd0, rnd1, model0, model1):
+        # e.g. round_000_001/split_00_01/seed_002_016
+        round_folder = f'round_{rnd0.id:03d}_{rnd1.id:03d}'
+        split_folder = f'split_{rnd0.split:02d}_{rnd1.split:02d}'
+        remix_folder = f'seed_{model0.id:03}_{model1.id:03}'
+        return ospj(self.data, round_folder, split_folder, remix_folder)
+
+    @mkdir_neg_p
     def data_round_seed(self, rnd, seed_model):
         return ospj(self.data_round(rnd), self.seed_model_str(seed_model))
 
@@ -332,13 +340,16 @@ class RoundHandler:
         seed_training_species = self.seed_model_training_species(seed_model)
         return [sp for sp in split_sp if sp not in seed_training_species]
 
-    def best_seed_model(self):
+    def best_seed_models(self, n):
         seed_eval_models = [em for em in self.round.evaluation_models if not em.is_fine_tuned]
         # confirm these have been evaluated
         assert seed_eval_models[0].weighted_test_genic_f1 is not None
         # sort descending genic f1
         seed_eval_models = sorted(seed_eval_models, key=lambda x: - x.weighted_test_genic_f1)
-        return seed_eval_models[0].seed_model  # seed model that had the best x-fold evaluation
+        return [x.seed_model for x in seed_eval_models[:n]]  # seed models that have the best x-fold evaluation
+
+    def best_seed_model(self):
+        return self.best_seed_models(1)[0]
 
     def setup_adjustment_data(self):
         """setup adjustment data for fine-tuning the adjustment model that performed the best"""
@@ -714,6 +725,43 @@ class RoundHandler:
         self.session.commit()
         # all other seed models are set randomly
         self.set_random_seeds(n_already_set=1)
+
+
+class RemixHandler:
+    def __init__(self, session, split, ids, gpu_indices, base_port):
+        self.session = session
+        self.split = split
+        self.ids = ids
+        self.gpu_indices = gpu_indices
+        self.base_port = base_port
+        self.pm = PathMaker(session)
+
+        # assumes two rounds can be found
+        rounds = session.query(orm.Round).filter(orm.Round.id.in_(ids)).all()
+        assert len(rounds) == 2
+
+    def setup_remix_training_data(self):
+        """setup remix data combining top trainers from both splits to make final candidate models
+
+        remix is basically (b0, r0) x (b1, r1), where b=best, r=runner up, and integers refer to the split"""
+        # directories will be b0,b1; b0,r1; r0,b1; r0,r1; in that order
+        seed_models = self.best_seed_models(2)
+        if self.split == 0:
+            which_model = [0, 0, 1, 1]
+        else:
+            which_model = [0, 1, 0, 1]
+
+        remix_dirs = self.pm.data_round_remix(self)
+
+        # seed trainers
+        for mod_idx, remix_dir in zip(which_model, remix_dirs):
+            seed_model = seed_models[mod_idx]
+            seed_sp_t = self.seed_model_training_species(seed_model)
+            # TODO validation species need to be added after the fact / with knowledge of both splits
+
+            for sp in seed_sp_t:
+                # for fine-tuning w/o changing species, but otherwise to match other adjustments
+                robust_4_me_symlink(self.pm.full_h5(sp.name), self.pm.h5_dest(remix_dir, sp.name))
 
 
 class Configgy:

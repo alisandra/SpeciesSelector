@@ -241,3 +241,41 @@ def metafilter(meta_csv, geenuff_csv, file_out, alt_splice_min, utr_min, busco_l
     print(len(remaining))
     with open(file_out, 'w') as f:
         f.write('\n'.join(remaining))
+
+
+@cli.command()
+@click.option('--working-dir', required=True)
+@click.option('--tuner-gpu-indices', type=str, help='gpu indices to constrain nni to (e.g. 0 or 1-3 or 1,2,3')
+@click.option('--base-port', type=int, default=8080)
+def remix_train(working_dir, tuner_gpu_indices, base_port):
+    """finds top two models for each split, remixes their species, and starts training"""
+    click.echo(f'will setup and run remix for {working_dir}')
+    # if latest round status is 2, start training seeds
+    engine, session = dbmanagement.mk_session(os.path.join(working_dir, 'spselec.sqlite3'), new_db=False)
+    gpu_indices = divvy_up_gpu_indices(tuner_gpu_indices)
+    for split in split_list(None):
+        latest_round_id = max(x.id for x in (session.query(orm.Round).filter(orm.Round.split == split).all()))
+        r = dbmanagement.RoundHandler(session, split, latest_round_id, gpu_indices=gpu_indices[split], n_seeds=None,
+                                      max_seed_training_species=None, base_port=base_port)
+        status = r.round.status.name
+        print(f'resuming from status "{status}"')
+        # store most recent eval results
+        if status == orm.RoundStatus.seeds_evaluating.name:
+            r.check_and_process_evaluation_results(is_fine_tuned=False)
+
+        else:
+            raise ValueError(f"remix_train only implemented from status {orm.RoundStatus.seeds_evaluating.name}, "
+                             f"but current status is {status}")
+
+    # todo, this shouldn't be round handler centric, it's for both splits
+    r.setup_remix_validation_data()
+    r.setup_remix_control_files()
+    r.start_remix_training()
+
+@cli.command()
+@click.option('--working-dir', required=True)
+@click.option('--tuner-gpu-indices', type=str, help='gpu indices to constrain nni to (e.g. 0 or 1-3 or 1,2,3')
+@click.option('--base-port', type=int, default=8080)
+def remix_eval(working_dir, tuner_gpu_indices, base_port):
+    """evaluates remixed models from 'remix_train' on all species"""
+    pass
