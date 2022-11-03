@@ -759,7 +759,6 @@ class RemixHandler:
         self.gpu_indices = gpu_indices
         self.base_port = base_port
         self.pm = PathMaker(session)
-        self.remix_dirs = None
 
         # assumes two rounds can be found
         rounds = session.query(orm.Round).filter(orm.Round.id.in_(ids)).all()
@@ -769,6 +768,8 @@ class RemixHandler:
                                             base_port=base_port, max_seed_training_species=None, n_seeds=None)
                                for i in ids]
 
+    @property
+    def remix_models(self):
         # remix is basically (b0, r0) x (b1, r1), where b=best, r=runner up, and integers refer to the split
         # directories will be b0,b1; b0,r1; r0,b1; r0,r1; in that order
         # remixes will tuple with (round_handler_idx, best_models_idx,
@@ -778,12 +779,14 @@ class RemixHandler:
             model_0 = best_models_by_round[0][idx0]
             model_1 = best_models_by_round[1][idx1]
             remixes.append((model_0, model_1))
+        return remixes
 
+    @property
+    def remix_dirs(self):
         remix_dirs = [self.pm.data_remixes(self.round_handlers[0],
                                            self.round_handlers[1],
-                                           model_0, model_1) for model_0, model_1 in remixes]
-        self.remix_dirs = remix_dirs
-        self.remix_models = remixes
+                                           model_0, model_1) for model_0, model_1 in self.remix_models]
+        return remix_dirs
 
     def check_and_process_evaluation_results(self):
         for r in self.round_handlers:

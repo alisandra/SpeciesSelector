@@ -279,3 +279,14 @@ def remix_train(working_dir, tuner_gpu_indices, base_port):
 def remix_eval(working_dir, tuner_gpu_indices, base_port):
     """evaluates remixed models from 'remix_train' on all species"""
     pass
+
+
+@cli.command()
+@click.option('--working-dir', required=True)
+def reset_wd(working_dir):
+    """changes wd in db to match argument, for moving/testing purposes"""
+    engine, session = dbmanagement.mk_session(os.path.join(working_dir, 'spselec.sqlite3'), new_db=False)
+    wd_obj = session.query(orm.Path).filter(orm.Path.name == "working_dir").first()
+    wd_obj.value = working_dir
+    session.add(wd_obj)
+    session.commit()
