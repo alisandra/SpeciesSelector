@@ -95,6 +95,10 @@ class EvaluationModel(Base):
     weighted_test_utr_f1 = Column(Float)
     weighted_test_cds_f1 = Column(Float)
     weighted_test_intron_f1 = Column(Float)
+    weighted_test_phase_0_f1 = Column(Float)
+    weighted_test_phase_1_f1 = Column(Float)
+    weighted_test_phase_2_f1 = Column(Float)
+    weighted_test_no_phase_f1 = Column(Float)
 
     def set_attr_by_name(self, name, val):
         # I hear sqlalchemy needs their own __setattr__ and also masks it
@@ -109,6 +113,14 @@ class EvaluationModel(Base):
             self.weighted_test_cds_f1 = val
         elif name == "weighted_test_intron_f1":
             self.weighted_test_intron_f1 = val
+        elif name == "weighted_test_phase_0_f1":
+            self.weighted_test_phase_0_f1 = val
+        elif name == "weighted_test_phase_1_f1":
+            self.weighted_test_phase_1_f1 = val
+        elif name == "weighted_test_phase_2_f1":
+            self.weighted_test_phase_2_f1 = val
+        elif name == "weighted_test_no_phase_f1":
+            self.weighted_test_no_phase_f1 = val
         else:
             raise AttributeError(f"cannot set attribute: {name} by string")
 
@@ -134,6 +146,10 @@ class RawResult(Base):
     utr_f1 = Column(Float)
     cds_f1 = Column(Float)
     intron_f1 = Column(Float)
+    no_phase_f1 = Column(Float)
+    phase_0_f1 = Column(Float)
+    phase_1_f1 = Column(Float)
+    phase_2_f1 = Column(Float)
 
     def get_attr_by_name(self, name):
         # again, bc __getattr__ doesn't work normally in sqlalchemy and I haven't found the 'right' way yet
@@ -147,6 +163,14 @@ class RawResult(Base):
             return self.cds_f1
         elif name == "intron_f1":
             return self.intron_f1
+        elif name == "no_phase_f1":
+            return self.no_phase_f1
+        elif name == "phase_0_f1":
+            return self.phase_0_f1
+        elif name == "phase_1_f1":
+            return self.phase_1_f1
+        elif name == "phase_2_f1":
+            return self.phase_2_f1
         else:
             raise AttributeError(f"unrecognized attribute {name}")
 

@@ -1,3 +1,4 @@
+from statistics import harmonic_mean
 from typing import Union, List
 import itertools
 import os
@@ -370,8 +371,13 @@ class RoundHandler:
         seed_eval_models = [em for em in self.round.evaluation_models if not em.is_fine_tuned]
         # confirm these have been evaluated
         assert seed_eval_models[0].weighted_test_genic_f1 is not None
-        # sort descending genic f1
-        seed_eval_models = sorted(seed_eval_models, key=lambda x: - x.weighted_test_genic_f1)
+
+        # we will choose the best harmonic mean of genic_f1 and phase_0
+        def rate_model(x):
+            score = harmonic_mean([x.weighted_test_genic_f1, x.weighted_test_phase_0_f1])
+            return score
+        # sort descending genic f1 / phase
+        seed_eval_models = sorted(seed_eval_models, key=rate_model, reverse=True)
         return [x.seed_model for x in seed_eval_models[:n]]  # seed models that have the best x-fold evaluation
 
     def best_seed_model(self):
@@ -674,7 +680,8 @@ class RoundHandler:
             # skip seeds (is_fine_tuned = False) when running for adjustments
             if eval_model.is_fine_tuned == is_fine_tuned:
                 raw_results = eval_model.raw_results
-                for f1_str in ["genic_f1", "intergenic_f1", "utr_f1", "cds_f1", "intron_f1"]:
+                for f1_str in ["genic_f1", "intergenic_f1", "utr_f1", "cds_f1", "intron_f1", "no_phase_f1",
+                               "phase_0_f1", "phase_1_f1", "phase_2_f1"]:
                     weighted = self.aggregate_res(f1_str, raw_results)
                     eval_model.set_attr_by_name(f"weighted_test_{f1_str}", weighted)
                 to_add.append(eval_model)
@@ -703,7 +710,11 @@ class RoundHandler:
                                        intergenic_f1=results[F1Decode.IG],
                                        utr_f1=results[F1Decode.UTR],
                                        cds_f1=results[F1Decode.CDS],
-                                       intron_f1=results[F1Decode.INTRON])
+                                       intron_f1=results[F1Decode.INTRON],
+                                       no_phase_f1=results[F1Decode.NO_PHASE],
+                                       phase_0_f1=results[F1Decode.PHASE_0],
+                                       phase_1_f1=results[F1Decode.PHASE_1],
+                                       phase_2_f1=results[F1Decode.PHASE_2])
             self.session.add(raw_result)
 
     @staticmethod

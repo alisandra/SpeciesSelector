@@ -75,7 +75,11 @@ class F1Decode:
     CDS = 'exon'
     INTRON = 'intron'
     GENIC = 'genic'
-    CATEGORIES_OF_INTEREST = [IG, UTR, CDS, INTRON, GENIC]
+    NO_PHASE = "no_phase"
+    PHASE_0 = "phase_0"
+    PHASE_1 = "phase_1"
+    PHASE_2 = "phase_2"
+    CATEGORIES_OF_INTEREST = [IG, UTR, CDS, INTRON, GENIC, NO_PHASE, PHASE_0, PHASE_1, PHASE_2]
 
 
 # parsing trial.log/eval.log files
