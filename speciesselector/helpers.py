@@ -134,6 +134,13 @@ def divvy_up_gpu_indices(raw_indices):
     # returned as a string, to directly fill the gpuIndices NNI parameter
     if raw_indices is None:
         return None, None
+    raw_numbers = parse_gpu_indices_to_numbers(raw_indices)
+    assert len(raw_numbers) >= 2
+    halfway = len(raw_numbers) // 2
+    return int_list_to_str(raw_numbers[:halfway]), int_list_to_str(raw_numbers[halfway:])
+
+
+def parse_gpu_indices_to_numbers(raw_indices):
     raw_numbers = []
     items = raw_indices.split(',')
     for item in items:
@@ -143,9 +150,16 @@ def divvy_up_gpu_indices(raw_indices):
         else:
             raw_numbers += [int(x) for x in raw_numbers]
     raw_numbers = list(set(raw_numbers))
-    assert len(raw_numbers) >= 2
-    halfway = len(raw_numbers) // 2
-    return int_list_to_str(raw_numbers[:halfway]), int_list_to_str(raw_numbers[halfway:])
+    return raw_numbers
+
+
+def parse_gpu_indices(raw_indices):
+    """take input indices and convert to comma separated list, for consistency"""
+    # this might not be necessary, but it won't hurt; todo figure that out
+    if raw_indices is None:
+        return None
+    else:
+        return int_list_to_str(parse_gpu_indices_to_numbers(raw_indices))
 
 
 def int_list_to_str(ints):

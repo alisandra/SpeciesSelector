@@ -35,6 +35,9 @@ class RoundStatus(enum.Enum):
     adjustments_prepped = "adjustments_prepped"  # adj symlinks and control files created
     adjustments_training = "adjustments_training"  # nni started for adj training
     adjustments_evaluating = "adjustments_evaluating"  # nni started for adj evaluation
+    remix_prepped = "remix_prepped"
+    remix_training = "remix_training"
+    remix_evaluating = "remix_evaluating"
 
 
 class Round(Base):

@@ -9,7 +9,7 @@ import shutil
 import pandas as pd
 from .filtering.filter import UTRFilter, BuscoFilter, AltSpliceFilter, exemptions_as_sp_names
 from .helpers import (divvy_up_gpu_indices,
-                      split_list)
+                      split_list, parse_gpu_indices)
 
 
 @click.group()
@@ -252,25 +252,25 @@ def remix_train(working_dir, tuner_gpu_indices, base_port):
     click.echo(f'will setup and run remix for {working_dir}')
     # if latest round status is 2, start training seeds
     engine, session = dbmanagement.mk_session(os.path.join(working_dir, 'spselec.sqlite3'), new_db=False)
-    gpu_indices = divvy_up_gpu_indices(tuner_gpu_indices)
-    for split in split_list(None):
-        latest_round_id = max(x.id for x in (session.query(orm.Round).filter(orm.Round.split == split).all()))
-        r = dbmanagement.RoundHandler(session, split, latest_round_id, gpu_indices=gpu_indices[split], n_seeds=None,
-                                      max_seed_training_species=None, base_port=base_port)
-        status = r.round.status.name
-        print(f'resuming from status "{status}"')
-        # store most recent eval results
-        if status == orm.RoundStatus.seeds_evaluating.name:
-            r.check_and_process_evaluation_results(is_fine_tuned=False)
+    gpu_indices = parse_gpu_indices(tuner_gpu_indices)  # todo, bypass for all
+    latest_round_ids = sorted(x.id for x in (session.query(orm.Round).all()))[-2:]
+    r = dbmanagement.RemixHandler(session, latest_round_ids, gpu_indices=gpu_indices,
+                                  base_port=base_port)
+    status = r.rounds[0].status.name
+    assert status == r.rounds[1].status.name
+    print(f'resuming from status "{status}"')
+    # store most recent eval results
+    if status == orm.RoundStatus.seeds_evaluating.name:
+        r.check_and_process_evaluation_results()
 
-        else:
-            raise ValueError(f"remix_train only implemented from status {orm.RoundStatus.seeds_evaluating.name}, "
-                             f"but current status is {status}")
+    else:
+        raise ValueError(f"remix_train only implemented from status {orm.RoundStatus.seeds_evaluating.name}, "
+                         f"but current status is {status}")
 
-    # todo, this shouldn't be round handler centric, it's for both splits
-    r.setup_remix_validation_data()
+    r.setup_remix_data()
     r.setup_remix_control_files()
-    r.start_remix_training()
+    #r.start_remix_training()
+
 
 @cli.command()
 @click.option('--working-dir', required=True)

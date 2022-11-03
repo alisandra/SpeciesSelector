@@ -1,3 +1,5 @@
+from typing import Union, List
+import itertools
 import os
 import shutil
 import subprocess
@@ -150,6 +152,10 @@ class PathMaker:
         return f'seed_{seed_model.id:03}'
 
     @staticmethod
+    def remix_model_str(model0, model1):
+        return f'seed_{model0.id:03}_{model1.id:03}'
+
+    @staticmethod
     def sm_id_from_sm_str(sm_str):
         id_str = re.sub('seed_', '', sm_str)
         return int(id_str)
@@ -158,6 +164,11 @@ class PathMaker:
     def round(self, rnd):
         rtemp, stemp = 'round_{:03}', 'split_{:02}'
         return ospj(rtemp.format(rnd.id), stemp.format(rnd.split))
+
+    def round_remix(self, rnd0, rnd1):
+        round_folder = f'round_{rnd0.id:03d}_{rnd1.id:03d}'
+        split_folder = f'split_{rnd0.split:02d}_{rnd1.split:02d}'
+        return ospj(round_folder, split_folder)
 
     @property
     @mkdir_neg_p
@@ -171,10 +182,9 @@ class PathMaker:
     @mkdir_neg_p
     def data_remixes(self, rnd0, rnd1, model0, model1):
         # e.g. round_000_001/split_00_01/seed_002_016
-        round_folder = f'round_{rnd0.id:03d}_{rnd1.id:03d}'
-        split_folder = f'split_{rnd0.split:02d}_{rnd1.split:02d}'
-        remix_folder = f'seed_{model0.id:03}_{model1.id:03}'
-        return ospj(self.data, round_folder, split_folder, remix_folder)
+        rnd = self.round_remix(rnd0, rnd1)
+        remix_folder = self.remix_model_str(model0, model1)
+        return ospj(self.data, rnd, remix_folder)
 
     @mkdir_neg_p
     def data_round_seed(self, rnd, seed_model):
@@ -219,8 +229,17 @@ class PathMaker:
         return ospj(self.nni_training_seed, self.round(rnd))
 
     @mkdir_neg_p
+    def nni_training_remix_round(self, rnd0, rnd1):
+        return ospj(self.nni_training_seed, self.round_remix(rnd0, rnd1))
+
+    @mkdir_neg_p
     def nni_evaluation_seed_round(self, rnd):
         return ospj(self.nni_evaluation_seed, self.round(rnd))
+
+    @mkdir_neg_p
+    def nni_evaluation_remix_round(self, rnd0, rnd1):
+        # leaving it under seed primarily because that's what I did manually...
+        return ospj(self.nni_evaluation_seed, self.round_remix(rnd0, rnd1))
 
     @mkdir_neg_p
     def nni_training_adj_round(self, rnd):
@@ -244,8 +263,15 @@ class PathMaker:
     def models_round_seed(self, rnd, seed_model):
         return ospj(self.models_round(rnd), self.seed_model_str(seed_model))
 
+    @mkdir_neg_p
+    def models_round_remix(self, rnd0, rnd1, model0, model1):
+        return ospj(self.models, self.round_remix(rnd0, rnd1), self.remix_model_str(model0, model1))
+
     def h5_round_seed(self, rnd, seed_model, model='best_model.h5'):
         return ospj(self.models_round_seed(rnd, seed_model), model)
+
+    def h5_round_remix(self, rnd0, rnd1, model0, model1, model='best_model.h5'):
+        return ospj(self.models_round_remix(rnd0, rnd1, model0, model1), model)
 
     @mkdir_neg_p
     def models_round_adj(self, rnd):
@@ -403,7 +429,6 @@ class RoundHandler:
 
             for sp in seed_sp_v:
                 robust_4_me_symlink(self.pm.subset_h5(sp.name), self.pm.h5_dest(seed_dir, sp.name, is_train=False))
-
 
     def setup_seed_control_files(self):
         configgy = Configgy(self.pm.config_template, self)
@@ -728,44 +753,77 @@ class RoundHandler:
 
 
 class RemixHandler:
-    def __init__(self, session, split, ids, gpu_indices, base_port):
+    def __init__(self, session, ids, gpu_indices, base_port):
         self.session = session
-        self.split = split
         self.ids = ids
         self.gpu_indices = gpu_indices
         self.base_port = base_port
         self.pm = PathMaker(session)
+        self.remix_dirs = None
 
         # assumes two rounds can be found
         rounds = session.query(orm.Round).filter(orm.Round.id.in_(ids)).all()
         assert len(rounds) == 2
+        self.rounds = rounds
+        self.round_handlers = [RoundHandler(session, split=i % 2, id=i, gpu_indices=None,
+                                            base_port=base_port, max_seed_training_species=None, n_seeds=None)
+                               for i in ids]
 
-    def setup_remix_training_data(self):
-        """setup remix data combining top trainers from both splits to make final candidate models
-
-        remix is basically (b0, r0) x (b1, r1), where b=best, r=runner up, and integers refer to the split"""
+        # remix is basically (b0, r0) x (b1, r1), where b=best, r=runner up, and integers refer to the split
         # directories will be b0,b1; b0,r1; r0,b1; r0,r1; in that order
-        seed_models = self.best_seed_models(2)
-        if self.split == 0:
-            which_model = [0, 0, 1, 1]
-        else:
-            which_model = [0, 1, 0, 1]
+        # remixes will tuple with (round_handler_idx, best_models_idx,
+        remixes = []
+        best_models_by_round = [r.best_seed_models(2) for r in self.round_handlers]
+        for idx0, idx1 in itertools.product([0, 1], [0, 1]):
+            model_0 = best_models_by_round[0][idx0]
+            model_1 = best_models_by_round[1][idx1]
+            remixes.append((model_0, model_1))
 
-        remix_dirs = self.pm.data_round_remix(self)
+        remix_dirs = [self.pm.data_remixes(self.round_handlers[0],
+                                           self.round_handlers[1],
+                                           model_0, model_1) for model_0, model_1 in remixes]
+        self.remix_dirs = remix_dirs
+        self.remix_models = remixes
 
-        # seed trainers
-        for mod_idx, remix_dir in zip(which_model, remix_dirs):
-            seed_model = seed_models[mod_idx]
-            seed_sp_t = self.seed_model_training_species(seed_model)
+    def check_and_process_evaluation_results(self):
+        for r in self.round_handlers:
+            r.check_and_process_evaluation_results(is_fine_tuned=False)
+
+    def validation_species(self, training_species):
+        all_species = self.session.query(orm.Species).\
+            filter(orm.Species.is_quality).all()
+        return [x for x in all_species if x not in training_species]
+
+    def setup_remix_data(self):
+        """setup remix data combining top trainers from both splits to make final candidate models"""
+        for models, remix_dir in zip(self.remix_models, self.remix_dirs):
+            remix_sp_t = self.round_handlers[0].seed_model_training_species(models[0]) + \
+               self.round_handlers[1].seed_model_training_species(models[1])
             # TODO validation species need to be added after the fact / with knowledge of both splits
-
-            for sp in seed_sp_t:
+            remix_sp_v = self.validation_species(remix_sp_t)
+            for sp in remix_sp_t:
                 # for fine-tuning w/o changing species, but otherwise to match other adjustments
                 robust_4_me_symlink(self.pm.full_h5(sp.name), self.pm.h5_dest(remix_dir, sp.name))
 
+            for sp in remix_sp_v:
+                robust_4_me_symlink(self.pm.subset_h5(sp.name), self.pm.h5_dest(remix_dir, sp.name, is_train=False))
+
+    def setup_remix_control_files(self):
+        configgy = Configgy(self.pm.config_template, self)
+        # train seed
+        cfg_ssj = configgy.fmt_train_generic(self.remix_dirs)
+        configgy.write_to(cfg_ssj, self.pm.nni_training_remix_round(*self.round_handlers))
+        # eval seed
+        cfg_ssj = configgy.fmt_remix_evaluations()
+        configgy.write_to(cfg_ssj, self.pm.nni_evaluation_remix_round(*self.round_handlers))
+        for rh in self.round_handlers:
+            rh.round.status = orm.RoundStatus.remix_prepped.name
+            self.session.add(rh.round)
+        self.session.commit()
+
 
 class Configgy:
-    def __init__(self, template_path: str, round_handler: RoundHandler):
+    def __init__(self, template_path: str, round_handler: Union[RoundHandler, RemixHandler]):
         with open(template_path) as f:
             self.config_template = f.readlines()
         self.config_template = [x.rstrip() for x in self.config_template]
@@ -793,6 +851,9 @@ class Configgy:
 
     def fmt_train_seed(self):
         data_dirs = [self.rh.pm.data_round_seed(self.rh, sm) for sm in self.rh.seed_models]
+        return self.fmt_train_generic(data_dirs)
+
+    def fmt_train_generic(self, data_dirs):
         search_space = {'data_dir': {'_type': "choice", "_value": data_dirs}}
         config_str = self.config()
         return config_str, search_space
@@ -823,12 +884,25 @@ class Configgy:
         return config_str, search_space
 
     def fmt_seed_evaluations(self):
-        config_str = self.config('--eval')
         xfold_species = self.rh.session.query(orm.Species).filter(orm.Species.split != self.rh.split).\
             filter(orm.Species.is_quality).all()
         seed_models = self.rh.seed_models
-        test_datas = [self.rh.pm.subset_h5(sp.name) for sp in xfold_species]
         load_model_paths = [self.rh.pm.h5_round_seed(self.rh, sm) for sm in seed_models]
+        return self.fmt_evaluations_generic(xfold_species, load_model_paths)
+
+    def fmt_remix_evaluations(self):
+        assert isinstance(self.rh, RemixHandler)
+        # in contrast to other evaluations, this will simply be on _all_ species; as one will want this anyway.
+        # which to consider in selecting the best will be handled post-hoc
+        all_species = self.rh.session.query(orm.Species).filter(orm.Species.is_quality).all()
+        remix_models = self.rh.remix_models
+        rounds = self.rh.round_handlers
+        load_model_paths = [self.rh.pm.h5_round_remix(rounds[0], rounds[1], m0, m1) for m0, m1 in remix_models]
+        return self.fmt_evaluations_generic(species=all_species, load_model_paths=load_model_paths)
+
+    def fmt_evaluations_generic(self, species: List[orm.Species], load_model_paths: List[str]):
+        config_str = self.config('--eval')
+        test_datas = [self.rh.pm.subset_h5(sp.name) for sp in species]
         search_space = {'test_data': {'_type': "choice", "_value": test_datas},
                         'load_model_path': {'_type': 'choice', '_value': load_model_paths}}
         return config_str, search_space
