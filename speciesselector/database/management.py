@@ -803,6 +803,31 @@ class RemixHandler:
         for r in self.round_handlers:
             r.check_and_process_evaluation_results(is_fine_tuned=False)
 
+    def check_and_link_remix_results(self):
+        assert self.round.status.name == orm.RoundStatus.remix_training.name
+        # get trial dir
+        trial_base = ospj(self.pm.nni_home, self.round_handlers[0].round.nni_remix_id, 'trials')
+        trials = os.listdir(trial_base)
+        assert len(trials) == len(self.remix_models)
+        to_add = []
+        for trial in trials:
+            data_name = self.data_dir_frm_json(trial_base, trial)
+            seed_model = self.seed_model_from_sm_str(data_name)
+            # link all models for loading and eval
+            robust_4_me_symlink(ospj(trial_base, trial, 'best_model.h5'), self.pm.h5_round_seed(self, seed_model))
+            # and add to db
+            existing_matches = self.session.query(orm.EvaluationModel).\
+                filter(orm.EvaluationModel.round_id == self.id).\
+                filter(orm.EvaluationModel.seed_model_id == seed_model.id).\
+                filter(orm.EvaluationModel.is_fine_tuned).all()
+            if not existing_matches:
+                adj_model = orm.EvaluationModel(round=self.round, is_fine_tuned=False,
+                                                delta_n_species=0,  # seeds have no modification
+                                                seed_model=seed_model)
+                to_add.append(adj_model)
+        self.session.add_all(to_add)
+        self.session.commit()
+        self.stop_nni()
     def validation_species(self, training_species):
         all_species = self.session.query(orm.Species).\
             filter(orm.Species.is_quality).all()
@@ -840,6 +865,12 @@ class RemixHandler:
                        status_out=orm.RoundStatus.remix_training.name,
                        nni_dir=self.pm.nni_training_remix_round(*self.round_handlers),
                        record_to='nni_remix_id')
+
+    def start_remix_evaluation(self):
+        self.start_nni(status_in=orm.RoundStatus.remix_training,
+                       status_out=orm.RoundStatus.remix_evaluating,
+                       nni_dir=self.pm.nni_evaluation_remix_round(*self.round_handlers),
+                       record_to='nni_remix_eval_id')
 
     def start_nni(self, status_in, status_out, nni_dir, record_to):
         """starts nni experiment, copies control files, saves IDs in round 0"""

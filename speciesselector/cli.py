@@ -252,7 +252,7 @@ def remix_train(working_dir, tuner_gpu_indices, base_port):
     click.echo(f'will setup and run remix for {working_dir}')
     # if latest round status is 2, start training seeds
     engine, session = dbmanagement.mk_session(os.path.join(working_dir, 'spselec.sqlite3'), new_db=False)
-    gpu_indices = parse_gpu_indices(tuner_gpu_indices)  # todo, bypass for all
+    gpu_indices = parse_gpu_indices(tuner_gpu_indices)
     latest_round_ids = sorted(x.id for x in (session.query(orm.Round).all()))[-2:]
     r = dbmanagement.RemixHandler(session, latest_round_ids, gpu_indices=gpu_indices,
                                   base_port=base_port)
@@ -278,7 +278,22 @@ def remix_train(working_dir, tuner_gpu_indices, base_port):
 @click.option('--base-port', type=int, default=8080)
 def remix_eval(working_dir, tuner_gpu_indices, base_port):
     """evaluates remixed models from 'remix_train' on all species"""
-    pass
+    click.echo(f'will eval remix for {working_dir}')
+    # if latest round status is 2, start training seeds
+    engine, session = dbmanagement.mk_session(os.path.join(working_dir, 'spselec.sqlite3'), new_db=False)
+    gpu_indices = parse_gpu_indices(tuner_gpu_indices)
+    latest_round_ids = sorted(x.id for x in (session.query(orm.Round).all()))[-2:]
+    r = dbmanagement.RemixHandler(session, latest_round_ids, gpu_indices=gpu_indices,
+                                  base_port=base_port)
+    status = r.rounds[0].status.name
+
+    if status == orm.RoundStatus.remix_training.name:
+        pass
+        #r.check_and_link_seed_results()
+        #r.start_seed_evaluation()
+    else:
+        raise ValueError(f"remix_eval only implemented from status {orm.RoundStatus.remix_training.name}, "
+                         f"but current status is {status}")
 
 
 @cli.command()
