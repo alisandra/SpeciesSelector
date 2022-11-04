@@ -73,6 +73,7 @@ class SeedModel(Base):
     id = Column(Integer, primary_key=True)
     round_id = Column(Integer, ForeignKey('round.id'), nullable=False)
     round = relationship('Round', back_populates='seed_models')
+    is_remix = Column(Boolean)
     split = Column(Integer)  # could also be derived from species below
     seed_training_species = relationship('SeedTrainingSpecies', back_populates='seed_model')
     evaluation_models = relationship('EvaluationModel', back_populates='seed_model')

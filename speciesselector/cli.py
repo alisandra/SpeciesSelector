@@ -268,6 +268,7 @@ def remix_train(working_dir, tuner_gpu_indices, base_port):
         raise ValueError(f"remix_train only implemented from status {orm.RoundStatus.seeds_evaluating.name}, "
                          f"but current status is {status}")
 
+    r.make_remix_model_entries()
     r.setup_remix_data()
     r.setup_remix_control_files()
     r.start_remix_training()
@@ -289,9 +290,9 @@ def remix_eval(working_dir, tuner_gpu_indices, base_port):
     status = r.rounds[0].status.name
 
     if status == orm.RoundStatus.remix_training.name:
-        pass
-        #r.check_and_link_seed_results()
-        #r.start_seed_evaluation()
+        r.make_remix_model_entries()
+        r.check_and_link_remix_results()
+        r.start_remix_evaluation()
     else:
         raise ValueError(f"remix_eval only implemented from status {orm.RoundStatus.remix_training.name}, "
                          f"but current status is {status}")

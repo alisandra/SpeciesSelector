@@ -112,7 +112,7 @@ class RoundHandler:
             random.shuffle(set_sp)
             trainers = set_sp[:n_seed_training_sp]
             # setup seed models & seed trainers
-            seed_model = orm.SeedModel(split=self.split, round=self.round)
+            seed_model = orm.SeedModel(split=self.split, round=self.round, is_remix=False)
             seed_trainers = [orm.SeedTrainingSpecies(species=s, seed_model=seed_model) for s in trainers]
             self.session.add(seed_model)
             self.session.add_all(seed_trainers)
@@ -313,7 +313,7 @@ class RoundHandler:
             existing_matches = self.session.query(orm.EvaluationModel).\
                 filter(orm.EvaluationModel.round_id == self.id).\
                 filter(orm.EvaluationModel.seed_model_id == seed_model.id).\
-                filter(orm.EvaluationModel.is_fine_tuned).all()
+                filter(not_(orm.EvaluationModel.is_fine_tuned)).all()
             if not existing_matches:
                 adj_model = orm.EvaluationModel(round=self.round, is_fine_tuned=False,
                                                 delta_n_species=0,  # seeds have no modification
@@ -394,6 +394,7 @@ class RoundHandler:
             raise ValueError(f"Number of species: {sp} found matching '{sp_name}' is not 1!")
 
     def seed_model_from_sm_str(self, sm_str):
+        """from seed model string, to seed_model orm obj"""
         sm_id = self.pm.sm_id_from_sm_str(sm_str)
         seed_model = self.session.query(orm.SeedModel).filter(orm.SeedModel.id == sm_id).first()
         return seed_model
@@ -516,7 +517,7 @@ class RoundHandler:
                 trainers = [x for x in trainers if x != adj_model.species]
             n_changed += 1
         # add seed model & seed trainers to db
-        seed_model = orm.SeedModel(split=self.split, round=self.round)
+        seed_model = orm.SeedModel(split=self.split, round=self.round, is_remix=False)
         seed_trainers = [orm.SeedTrainingSpecies(species=s, seed_model=seed_model) for s in trainers]
         in_split = self.session.query(orm.Species).filter(orm.Species.split == self.split).\
             filter(orm.Species.is_quality).all()

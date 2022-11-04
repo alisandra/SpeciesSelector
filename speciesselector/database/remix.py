@@ -7,6 +7,12 @@ from .paths import PathMaker, robust_4_me_symlink
 from .management import RoundHandler, ospj
 from .config import Configgy
 
+from sqlalchemy import not_
+
+
+class NoEntryException(Exception):
+    pass
+
 
 class RemixHandler:
     def __init__(self, session, ids, gpu_indices, base_port):
@@ -51,30 +57,40 @@ class RemixHandler:
     def check_and_link_remix_results(self):
         assert self.round.status.name == orm.RoundStatus.remix_training.name
         # get trial dir
-        trial_base = ospj(self.pm.nni_home, self.round_handlers[0].round.nni_remix_id, 'trials')
+        rh0 = self.round_handlers[0]
+        trial_base = ospj(self.pm.nni_home, rh0.round.nni_remix_id, 'trials')
         trials = os.listdir(trial_base)
         assert len(trials) == len(self.remix_models)
         to_add = []
         for trial in trials:
-            data_name = self.data_dir_frm_json(trial_base, trial)
-            seed_model = self.seed_model_from_sm_str(data_name)
+            data_name = rh0.data_dir_frm_json(trial_base, trial)  # e.g. seed_020_036
+            seed_models = self.seed_models_from_sm_str(data_name)
             # link all models for loading and eval
-            robust_4_me_symlink(ospj(trial_base, trial, 'best_model.h5'), self.pm.h5_round_seed(self, seed_model))
-            # and add to db
+            robust_4_me_symlink(ospj(trial_base, trial, 'best_model.h5'),
+                                self.pm.h5_round_remix(*self.round_handlers + seed_models))
+            # and add to the db
+            remix_seed_model = self.get_or_make_remix_model_entry(seed_models)
             existing_matches = self.session.query(orm.EvaluationModel).\
                 filter(orm.EvaluationModel.round_id == self.id).\
-                filter(orm.EvaluationModel.seed_model_id == seed_model.id).\
-                filter(orm.EvaluationModel.is_fine_tuned).all()
+                filter(orm.EvaluationModel.seed_model_id == remix_seed_model.id).\
+                filter(not_(orm.EvaluationModel.is_fine_tuned)).all()
             if not existing_matches:
-                adj_model = orm.EvaluationModel(round=self.round, is_fine_tuned=False,
+                adj_model = orm.EvaluationModel(round=rh0.round, is_fine_tuned=False,
                                                 delta_n_species=0,  # seeds have no modification
-                                                seed_model=seed_model)
+                                                seed_model=remix_seed_model)
                 to_add.append(adj_model)
         self.session.add_all(to_add)
         self.session.commit()
-        self.stop_nni()
+        rh0.stop_nni()
+
+    def training_species(self, models):
+        """union of Species objects for two models"""
+        ret = self.round_handlers[0].seed_model_training_species(models[0]) + \
+            self.round_handlers[1].seed_model_training_species(models[1])
+        return ret
 
     def validation_species(self, training_species):
+        """selects all quality non-training species"""
         all_species = self.session.query(orm.Species).\
             filter(orm.Species.is_quality).all()
         return [x for x in all_species if x not in training_species]
@@ -82,9 +98,7 @@ class RemixHandler:
     def setup_remix_data(self):
         """setup remix data combining top trainers from both splits to make final candidate models"""
         for models, remix_dir in zip(self.remix_models, self.remix_dirs):
-            remix_sp_t = self.round_handlers[0].seed_model_training_species(models[0]) + \
-               self.round_handlers[1].seed_model_training_species(models[1])
-            # TODO validation species need to be added after the fact / with knowledge of both splits
+            remix_sp_t = self.training_species(models)
             remix_sp_v = self.validation_species(remix_sp_t)
             for sp in remix_sp_t:
                 # for fine-tuning w/o changing species, but otherwise to match other adjustments
@@ -92,6 +106,44 @@ class RemixHandler:
 
             for sp in remix_sp_v:
                 robust_4_me_symlink(self.pm.subset_h5(sp.name), self.pm.h5_dest(remix_dir, sp.name, is_train=False))
+
+    def make_remix_model_entry(self, models):
+        trainers = self.training_species(models)
+        seed_model = orm.SeedModel(split=0, round=self.round_handlers[0].round, is_remix=True)
+        seed_trainers = [orm.SeedTrainingSpecies(species=s, seed_model=seed_model) for s in trainers]
+        self.session.add(seed_model)
+        self.session.add_all(seed_trainers)
+        self.session.commit()
+        return seed_model
+
+    def make_remix_model_entries(self):
+        for models in self.remix_models:
+            self.make_remix_model_entry(models)
+
+    def get_or_make_remix_model_entry(self, models):
+        try:
+            return self.get_remix_model_entry(models)
+        except NoEntryException:
+            return self.make_remix_model_entry(models)
+
+    def get_remix_model_entry(self, models):
+        trainers = self.training_species(models)
+        t_set = set([x.species.name for x in trainers])
+        maybe_s_models = self.session.query(orm.SeedModel).filter(orm.SeedModel.is_remix).\
+            filter(orm.SeedModel.round_id == self.round_handlers[0].round.id)
+        remaining_sm = []
+        # because there was no actual saving of the remix seed_model ID into any path / anything that can
+        # be regenerated later; we'll figure out which one is which based on species matching the combined
+        # species of the two sub models that _were_ saved / used in naming
+        # here's hoping this really is that last thing built on this...
+        for sm in maybe_s_models:
+            sm_trainers = set([x.species.name for x in sm.seed_training_species])
+            if t_set == sm_trainers:
+                remaining_sm.append(sm)
+        if not len(remaining_sm):
+            raise NoEntryException
+        assert len(remaining_sm) == 1
+        return remaining_sm[0]
 
     def setup_remix_control_files(self):
         configgy = Configgy(self.pm.config_template, self)
@@ -105,6 +157,12 @@ class RemixHandler:
             rh.round.status = orm.RoundStatus.remix_prepped.name
             self.session.add(rh.round)
         self.session.commit()
+
+    def seed_models_from_sm_str(self, sm_str):
+        """from seed models string, to seed_model orm objects"""
+        sm_ids = self.pm.sm_ids_from_sms_str(sm_str)
+        seed_models = self.session.query(orm.SeedModel).filter(orm.SeedModel.id.in_(sm_ids)).all()
+        return seed_models
 
     def start_remix_training(self):
         self.start_nni(status_in=orm.RoundStatus.remix_prepped.name,

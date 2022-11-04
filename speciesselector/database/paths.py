@@ -91,6 +91,13 @@ class PathMaker:
         id_str = re.sub('seed_', '', sm_str)
         return int(id_str)
 
+    @staticmethod
+    def sm_ids_from_sms_str(sm_str):
+        """parses integers from remix seeds, e.g. 'seed_020_036' -> (20, 36)"""
+        id_str = re.sub('seed_', '', sm_str)
+        id_strs = id_str.split('_')
+        return (int(x) for x in id_strs)
+
     # round / data related
     def round(self, rnd):
         rtemp, stemp = 'round_{:03}', 'split_{:02}'
