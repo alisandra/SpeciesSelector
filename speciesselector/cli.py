@@ -269,7 +269,7 @@ def remix_train(working_dir, tuner_gpu_indices, base_port):
 
     r.setup_remix_data()
     r.setup_remix_control_files()
-    #r.start_remix_training()
+    r.start_remix_training()
 
 
 @cli.command()

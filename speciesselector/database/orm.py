@@ -51,6 +51,8 @@ class Round(Base):
     nni_seeds_eval_id = Column(String)
     nni_adjustments_id = Column(String)
     nni_adjustments_eval_id = Column(String)
+    nni_remix_id = Column(String)
+    nni_remix_eval_id = Column(String)
     seed_models = relationship('SeedModel', back_populates='round')
     evaluation_models = relationship('EvaluationModel', back_populates='round')
 

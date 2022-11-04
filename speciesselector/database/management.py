@@ -835,6 +835,34 @@ class RemixHandler:
             self.session.add(rh.round)
         self.session.commit()
 
+    def start_remix_training(self):
+        self.start_nni(status_in=orm.RoundStatus.remix_prepped.name,
+                       status_out=orm.RoundStatus.remix_training.name,
+                       nni_dir=self.pm.nni_training_remix_round(*self.round_handlers),
+                       record_to='nni_remix_id')
+
+    def start_nni(self, status_in, status_out, nni_dir, record_to):
+        """starts nni experiment, copies control files, saves IDs in round 0"""
+        assert self.round_handlers[0].round.status.name == status_in, \
+            "status mismatch: {} != {}".format(self.round_handlers[0].round.status, status_in)
+        sp_args = ['nnictl', 'create', '-c', self.pm.config_yml, '-p', str(self.base_port)]
+        print('passing to subprocess: {}\nwith cwd: {}'.format(sp_args, nni_dir))
+        subprocess.run(sp_args, cwd=nni_dir)
+        # copy control files to nni directory (as usual/for convenience)
+        nni_exp_id = self.round_handlers[0].cp_control_files(_from=nni_dir)
+        # I'm sure there is a better way, but for now
+        if record_to == 'nni_remix_id':
+            self.round_handlers[0].round.nni_remix_id = nni_exp_id
+        elif record_to == "nni_remix_eval_id":
+            self.round_handlers[0].round.nni_remix_eval_id = nni_exp_id
+        else:
+            raise ValueError(f'unexpected/unhandled string value: {record_to} for "record_to"')
+        # record nni_id in db
+        for rh in self.round_handlers:
+            rh.round.status = status_out
+            self.session.add(rh.round)
+        self.session.commit()
+
 
 class Configgy:
     def __init__(self, template_path: str, round_handler: Union[RoundHandler, RemixHandler]):
