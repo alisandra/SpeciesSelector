@@ -5,6 +5,7 @@ import click_config_file
 import os
 from .database import management as dbmanagement
 from .database import orm
+from .database.remix import RemixHandler
 import shutil
 import pandas as pd
 from .filtering.filter import UTRFilter, BuscoFilter, AltSpliceFilter, exemptions_as_sp_names
@@ -254,8 +255,8 @@ def remix_train(working_dir, tuner_gpu_indices, base_port):
     engine, session = dbmanagement.mk_session(os.path.join(working_dir, 'spselec.sqlite3'), new_db=False)
     gpu_indices = parse_gpu_indices(tuner_gpu_indices)
     latest_round_ids = sorted(x.id for x in (session.query(orm.Round).all()))[-2:]
-    r = dbmanagement.RemixHandler(session, latest_round_ids, gpu_indices=gpu_indices,
-                                  base_port=base_port)
+    r = RemixHandler(session, latest_round_ids, gpu_indices=gpu_indices,
+                     base_port=base_port)
     status = r.rounds[0].status.name
     assert status == r.rounds[1].status.name
     print(f'resuming from status "{status}"')
@@ -283,8 +284,8 @@ def remix_eval(working_dir, tuner_gpu_indices, base_port):
     engine, session = dbmanagement.mk_session(os.path.join(working_dir, 'spselec.sqlite3'), new_db=False)
     gpu_indices = parse_gpu_indices(tuner_gpu_indices)
     latest_round_ids = sorted(x.id for x in (session.query(orm.Round).all()))[-2:]
-    r = dbmanagement.RemixHandler(session, latest_round_ids, gpu_indices=gpu_indices,
-                                  base_port=base_port)
+    r = RemixHandler(session, latest_round_ids, gpu_indices=gpu_indices,
+                     base_port=base_port)
     status = r.rounds[0].status.name
 
     if status == orm.RoundStatus.remix_training.name:
