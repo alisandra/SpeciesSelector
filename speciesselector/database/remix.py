@@ -55,9 +55,9 @@ class RemixHandler:
             r.check_and_process_evaluation_results(is_fine_tuned=False)
 
     def check_and_link_remix_results(self):
-        assert self.round.status.name == orm.RoundStatus.remix_training.name
         # get trial dir
         rh0 = self.round_handlers[0]
+        assert rh0.status.name == orm.RoundStatus.remix_training.name
         trial_base = ospj(self.pm.nni_home, rh0.round.nni_remix_id, 'trials')
         trials = os.listdir(trial_base)
         assert len(trials) == len(self.remix_models)
@@ -71,7 +71,7 @@ class RemixHandler:
             # and add to the db
             remix_seed_model = self.get_or_make_remix_model_entry(seed_models)
             existing_matches = self.session.query(orm.EvaluationModel).\
-                filter(orm.EvaluationModel.round_id == self.id).\
+                filter(orm.EvaluationModel.round_id == rh0.id).\
                 filter(orm.EvaluationModel.seed_model_id == remix_seed_model.id).\
                 filter(not_(orm.EvaluationModel.is_fine_tuned)).all()
             if not existing_matches:
@@ -128,7 +128,7 @@ class RemixHandler:
 
     def get_remix_model_entry(self, models):
         trainers = self.training_species(models)
-        t_set = set([x.species.name for x in trainers])
+        t_set = set([x.name for x in trainers])
         maybe_s_models = self.session.query(orm.SeedModel).filter(orm.SeedModel.is_remix).\
             filter(orm.SeedModel.round_id == self.round_handlers[0].round.id)
         remaining_sm = []
@@ -142,7 +142,7 @@ class RemixHandler:
                 remaining_sm.append(sm)
         if not len(remaining_sm):
             raise NoEntryException
-        assert len(remaining_sm) == 1
+        assert len(remaining_sm) == 1, f'> ({len(remaining_sm)})1 potential seed model found! {remaining_sm}'
         return remaining_sm[0]
 
     def setup_remix_control_files(self):
