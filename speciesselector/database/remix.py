@@ -57,7 +57,7 @@ class RemixHandler:
     def check_and_link_remix_results(self):
         # get trial dir
         rh0 = self.round_handlers[0]
-        assert rh0.status.name == orm.RoundStatus.remix_training.name
+        assert rh0.round.status.name == orm.RoundStatus.remix_training.name
         trial_base = ospj(self.pm.nni_home, rh0.round.nni_remix_id, 'trials')
         trials = os.listdir(trial_base)
         assert len(trials) == len(self.remix_models)
@@ -120,6 +120,10 @@ class RemixHandler:
         for models in self.remix_models:
             self.make_remix_model_entry(models)
 
+    def get_or_make_remix_model_entries(self):
+        for models in self.remix_models:
+            self.get_or_make_remix_model_entry(models)
+
     def get_or_make_remix_model_entry(self, models):
         try:
             return self.get_remix_model_entry(models)
@@ -171,8 +175,8 @@ class RemixHandler:
                        record_to='nni_remix_id')
 
     def start_remix_evaluation(self):
-        self.start_nni(status_in=orm.RoundStatus.remix_training,
-                       status_out=orm.RoundStatus.remix_evaluating,
+        self.start_nni(status_in=orm.RoundStatus.remix_training.name,
+                       status_out=orm.RoundStatus.remix_evaluating.name,
                        nni_dir=self.pm.nni_evaluation_remix_round(*self.round_handlers),
                        record_to='nni_remix_eval_id')
 

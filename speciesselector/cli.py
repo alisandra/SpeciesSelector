@@ -290,7 +290,7 @@ def remix_eval(working_dir, tuner_gpu_indices, base_port):
     status = r.rounds[0].status.name
 
     if status == orm.RoundStatus.remix_training.name:
-        r.make_remix_model_entries()
+        r.get_or_make_remix_model_entries()
         r.check_and_link_remix_results()
         r.start_remix_evaluation()
     else:
